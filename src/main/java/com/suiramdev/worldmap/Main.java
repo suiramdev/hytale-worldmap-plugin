@@ -1,6 +1,8 @@
 package com.suiramdev.worldmap;
 
 import com.hypixel.hytale.math.util.ChunkUtil;
+import com.hypixel.hytale.server.core.plugin.JavaPlugin;
+import com.hypixel.hytale.server.core.plugin.JavaPluginInit;
 import com.hypixel.hytale.server.core.universe.Universe;
 import com.hypixel.hytale.server.core.universe.world.World;
 import com.hypixel.hytale.server.core.universe.world.storage.ChunkStore;
@@ -11,6 +13,7 @@ import com.suiramdev.worldmap.services.HttpClientService;
 import com.suiramdev.worldmap.storage.StorageService;
 import it.unimi.dsi.fastutil.longs.LongSet;
 
+import javax.annotation.Nonnull;
 import java.io.File;
 import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
@@ -21,7 +24,7 @@ import java.util.concurrent.CompletableFuture;
  * @author suiramdev
  * @version 1.0.0
  */
-public class Main {
+public class Main extends JavaPlugin {
 
     private static Main instance;
 
@@ -34,15 +37,18 @@ public class Main {
     /**
      * Constructor - Called when plugin is loaded.
      */
-    public Main() {
-        instance = this;
-        System.out.println("[Worldmap] Plugin loaded!");
+    public Main(@Nonnull JavaPluginInit init) {
+        super(init);
     }
 
-    /**
-     * Called when plugin is enabled.
-     */
-    public void onEnable() {
+    @Override
+    protected void setup() {
+        instance = this;
+        System.out.println("[Worldmap] Plugin setup complete!");
+    }
+
+    @Override
+    protected void start() {
         System.out.println("[Worldmap] Plugin enabled!");
 
         try {
@@ -96,10 +102,8 @@ public class Main {
         }
     }
 
-    /**
-     * Called when plugin is disabled.
-     */
-    public void onDisable() {
+    @Override
+    protected void shutdown() {
         System.out.println("[Worldmap] Plugin disabled!");
 
         // Shutdown chunk processor (waits for ongoing tasks)

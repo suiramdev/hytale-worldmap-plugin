@@ -61,7 +61,7 @@ open class RunServerTask : DefaultTask() {
     fun run() {
         // Create directories
         val runDir = File(project.projectDir, "run").apply { mkdirs() }
-        val pluginsDir = File(runDir, "plugins").apply { mkdirs() }
+        val modsDir = File(runDir, "mods").apply { mkdirs() }
         val jarFile = File(runDir, "server.jar")
 
         // Cache directory for downloaded server JARs
@@ -99,9 +99,9 @@ open class RunServerTask : DefaultTask() {
         // Copy server JAR to run directory
         cachedJar.copyTo(jarFile, overwrite = true)
 
-        // Copy plugin JAR to plugins folder
+        // Copy plugin JAR to mods folder
         project.tasks.findByName("shadowJar")?.outputs?.files?.firstOrNull()?.let { shadowJar ->
-            val targetFile = File(pluginsDir, shadowJar.name)
+            val targetFile = File(modsDir, shadowJar.name)
             shadowJar.copyTo(targetFile, overwrite = true)
             println("Plugin copied to: ${targetFile.absolutePath}")
         } ?: run {
