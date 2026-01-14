@@ -58,3 +58,6 @@ desktop.ini
 
 # Decompiled files
 decompiled/
+
+# Hytale server JAR
+libs/hytale-server.jar
