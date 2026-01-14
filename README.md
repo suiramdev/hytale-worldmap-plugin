@@ -1,41 +1,56 @@
-# Hytale Plugin Template
+# Worldmap Plugin
 
-A minimal, ready-to-use template for creating Hytale plugins with modern build tools and automated testing.
+> **⚠️ Work in Progress** - This is an ongoing development project for a dynmap application in the Hytale game.
 
-> **✨ Builds immediately without any changes!** Clone and run `./gradlew shadowJar` to get a working plugin JAR.
+A Hytale server plugin that processes world chunks and sends them to the [Worldmap Web Application](https://github.com/suiramdev/hytale-worldmap) for real-time map visualization.
+
+## About
+
+This plugin is the **server-side component** of the Worldmap system. It runs on your Hytale server and:
+
+- Extracts chunk data (blocks, height maps, tint maps) from the Hytale world
+- Sends chunk data to the Worldmap web application's worker API
+- Tracks processed chunks to avoid duplicate processing
+- Processes chunks asynchronously to avoid impacting server performance
+
+**This plugin is designed to work with:** [https://github.com/suiramdev/hytale-worldmap](https://github.com/suiramdev/hytale-worldmap)
+
+The web application provides:
+- Interactive web-based map viewer
+- Real-time tile generation and rendering
+- Player and administrator map exploration tools
 
 ## Features
 
-✅ **Modern Build System** - Gradle with Kotlin DSL  
-✅ **Automated Testing** - Custom Gradle plugin for one-command server testing  
-✅ **Java 25** - Latest Java features  
-✅ **ShadowJar** - Automatic dependency bundling  
-✅ **CI/CD Ready** - GitHub Actions workflow included  
-✅ **Minimal Structure** - Only essential files, write your own code  
+✅ **Asynchronous Processing** - Chunks are processed in the background without blocking the server  
+✅ **Smart Tracking** - Tracks processed chunks to avoid duplicates  
+✅ **Configurable** - Easy configuration via `config.json`  
+✅ **Error Handling** - Robust error handling with retry logic  
+✅ **Performance Optimized** - Uses non-ticking chunks to avoid affecting gameplay  
+✅ **First Load Detection** - Automatically processes all existing chunks on first run  
 
----
+## Prerequisites
+
+- **Hytale Server** - A running Hytale server instance
+- **Java 25 JDK** - Required to build the plugin
+- **Worldmap Web Application** - The [web application](https://github.com/suiramdev/hytale-worldmap) must be running and accessible
+- **Hytale Server JAR** - You need to obtain `hytale-server.jar` and place it in `libs/hytale-server.jar` (see [Development](#development) section)
 
 ## Quick Start
 
-### Prerequisites
+### 0. Obtain Hytale Server JAR (Required for Building)
 
-- **Java 25 JDK** - [Download here](https://www.oracle.com/java/technologies/downloads/)
-- **IntelliJ IDEA** - [Download here](https://www.jetbrains.com/idea/download/) (Community Edition is fine)
-- **Git** - [Download here](https://git-scm.com/)
+Before building, you need to obtain `hytale-server.jar` and place it in `libs/hytale-server.jar`. This JAR file is not included in the repository and must be obtained separately.
 
-### 1. Clone or Download
+**For AI Coding Assistance:** If you're using AI coding assistants, you can decompile the JAR for better code completion:
 
 ```bash
-git clone https://github.com/yourusername/hytale-plugin-template.git
-cd hytale-plugin-template
+./scripts/decompile.sh libs/hytale-server.jar
 ```
 
-**The template builds immediately without any changes!**  
-You can customize it later when you're ready to develop your plugin.
+This decompiles the JAR to `decompiled/` for reference. See the [Development](#development) section for more details.
 
-### 2. Build Immediately (No Changes Needed!)
-
-The template works out-of-the-box:
+### 1. Build the Plugin
 
 ```bash
 # Windows
@@ -45,295 +60,226 @@ gradlew.bat shadowJar
 ./gradlew shadowJar
 ```
 
-Your plugin JAR will be in: `build/libs/TemplatePlugin-1.0.0.jar`
+The plugin JAR will be in: `build/libs/Worldmap-1.0.0.jar`
 
-### 3. Customize Your Plugin (Optional)
+### 2. Install the Plugin
 
-When ready to customize, edit these files:
+1. Copy the JAR file to your Hytale server's `plugins/` directory
+2. Ensure the Worldmap web application is running (see [web app setup](https://github.com/suiramdev/hytale-worldmap#quick-start))
+3. Start your Hytale server
 
-**`settings.gradle.kts`:**
-```kotlin
-rootProject.name = "your-plugin-name"
-```
+### 3. Configure the Plugin
 
-**`gradle.properties`:**
-```properties
-pluginGroup=com.yourname
-pluginVersion=1.0.0
-pluginDescription=Your plugin description
-```
+On first run, the plugin will create a `config.json` file in `plugins/Worldmap/`:
 
-**`src/main/resources/manifest.json`:**
 ```json
 {
-  "Group": "YourName",
-  "Name": "YourPluginName",
-  "Main": "com.yourname.yourplugin.YourPlugin"
+  "apiUrl": "http://localhost:3000/api/worker/process-chunk",
+  "requestTimeout": 30000,
+  "maxRetries": 3,
+  "batchSize": 10,
+  "debugMode": false
 }
 ```
 
-**Rename the main plugin class:**
-- Rename `src/main/java/com/example/templateplugin/TemplatePlugin.java`
-- Update package name to match your `pluginGroup`
+**Important Configuration:**
 
-### 4. Build Your Plugin
+- **`apiUrl`** - The URL of your Worldmap web application's worker API endpoint
+  - Default: `http://localhost:3000/api/worker/process-chunk`
+  - If your web app is running on a different host/port, update this accordingly
+- **`requestTimeout`** - HTTP request timeout in milliseconds (default: 30000)
+- **`maxRetries`** - Number of retry attempts for failed requests (default: 3)
+- **`batchSize`** - Number of concurrent chunk processing requests (default: 10)
+- **`debugMode`** - Enable debug logging (default: false)
 
-```bash
-# Windows
-gradlew.bat shadowJar
+### 4. First Run
 
-# Linux/Mac
-./gradlew shadowJar
+On the first run, the plugin will:
+1. Detect that no chunks have been processed
+2. Scan all chunks in your world
+3. Queue them for processing in the background
+4. Send chunk data to the web application's worker API
+
+This process runs asynchronously and won't impact server performance. Progress is logged to the server console.
+
+## How It Works
+
+### Chunk Processing Flow
+
+1. **Plugin Startup** - On server start, the plugin checks if this is the first load
+2. **Chunk Discovery** - If first load, it discovers all existing chunks in the world
+3. **Data Extraction** - For each chunk, it extracts:
+   - Block data (32x320x32 array of block IDs)
+   - Height map (32x32 array of height values)
+   - Tint map (32x32 array of tint values)
+   - Environment/biome data (if available)
+4. **API Communication** - Chunk data is sent to the web application's worker API
+5. **Tracking** - Processed chunks are tracked to avoid duplicate processing
+
+### Integration with Web Application
+
+The plugin communicates with the Worldmap web application via HTTP:
+
+```
+Plugin → HTTP POST → Web App Worker API → Tile Generation → Storage
 ```
 
-Your plugin JAR will be in: `build/libs/YourPluginName-1.0.0.jar`
+The web application's worker receives chunk data and:
+- Generates map tiles from the chunk data
+- Stores tiles in object storage (MinIO/S3)
+- Makes tiles available through the web interface
 
-### 5. Implement Your Plugin
+## Configuration
 
-Write your plugin code in `src/main/java/`:
-- Commands
-- Event listeners
-- Services
-- Storage
-- Utilities
+### config.json
 
-See our [documentation](../Documentation/) for examples and patterns.
+The configuration file is located at: `plugins/Worldmap/config.json`
 
-### 6. Test Your Plugin (Automated!)
+**Example Configuration:**
+
+```json
+{
+  "apiUrl": "http://your-server:3000/api/worker/process-chunk",
+  "requestTimeout": 30000,
+  "maxRetries": 5,
+  "batchSize": 20,
+  "debugMode": true
+}
+```
+
+**Configuration Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `apiUrl` | string | `http://localhost:3000/api/worker/process-chunk` | Worker API endpoint URL |
+| `requestTimeout` | number | 30000 | HTTP request timeout (ms) |
+| `maxRetries` | number | 3 | Maximum retry attempts for failed requests |
+| `batchSize` | number | 10 | Concurrent chunk processing limit |
+| `debugMode` | boolean | false | Enable detailed debug logging |
+
+### Network Configuration
+
+If your web application is running on a different machine:
+
+1. Update `apiUrl` in `config.json` to point to your web app's hostname/IP
+2. Ensure the Hytale server can reach the web application (firewall rules, network access)
+3. If using HTTPS, update the URL scheme: `https://your-server:3000/api/worker/process-chunk`
+
+## Development
+
+### Setting Up for Development
+
+Before building the plugin, you need to obtain the Hytale server JAR file:
+
+1. **Obtain `hytale-server.jar`** - You need to get the Hytale server JAR file yourself (it's not included in this repository)
+2. **Place it in `libs/`** - Copy the JAR file to `libs/hytale-server.jar`
+
+The plugin uses this JAR file as a compile-time dependency to access Hytale's API classes.
+
+### Decompiling for AI Coding Assistance
+
+If you're using AI coding assistants (like Cursor, GitHub Copilot, etc.), you can decompile the Hytale server JAR to make the API classes available for code completion and reference:
 
 ```bash
-# Windows
-gradlew.bat runServer
-
-# Linux/Mac
-./gradlew runServer
+# Decompile the Hytale server JAR
+./scripts/decompile.sh libs/hytale-server.jar
 ```
 
 This will:
-1. Download the Hytale server (cached for future runs)
-2. Build your plugin
-3. Copy it to the server's plugins folder
-4. Start the server with interactive console
+- Decompile `libs/hytale-server.jar` using CFR (Java decompiler)
+- Output the decompiled source code to `decompiled/`
+- Make Hytale API classes available for your IDE and AI assistants
 
----
+**Note:** The decompiled code is for reference only and should not be modified. It helps with:
+- Understanding Hytale API structure
+- Code completion in your IDE
+- AI assistants understanding the API
 
-## Project Structure
-
-```
-TemplatePlugin/
-├── .github/workflows/
-│   └── build.yml                    # CI/CD workflow
-├── buildSrc/
-│   ├── build.gradle.kts             # Custom plugin configuration
-│   └── src/main/kotlin/
-│       └── RunHytalePlugin.kt       # Automated server testing
-├── src/main/
-│   ├── java/com/example/templateplugin/
-│   │   └── TemplatePlugin.java      # Minimal main class (example)
-│   └── resources/
-│       └── manifest.json            # Plugin metadata
-├── .gitignore                       # Git ignore rules
-├── build.gradle.kts                 # Build configuration
-├── gradle.properties                # Project properties
-├── settings.gradle.kts              # Project settings
-├── LICENSE                          # MIT License
-└── README.md                        # This file
-```
-
-**Note:** This is a minimal template. Create your own folder structure:
-- `commands/` - For command implementations
-- `listeners/` - For event listeners
-- `services/` - For business logic
-- `storage/` - For data persistence
-- `utils/` - For utility classes
-- `config/` - For configuration management
-
----
-
-## Development Workflow
-
-### Building
+### Building from Source
 
 ```bash
-# Compile only
-./gradlew compileJava
+# Clone the repository
+git clone https://github.com/suiramdev/worldmap-plugin.git
+cd worldmap-plugin
 
-# Build plugin JAR
+# Ensure hytale-server.jar is in libs/
+# Then build the plugin
 ./gradlew shadowJar
+```
 
-# Clean and rebuild
-./gradlew clean shadowJar
+### Project Structure
+
+```
+worldmap-plugin/
+├── src/main/
+│   ├── java/com/suiramdev/worldmap/
+│   │   ├── Main.java                    # Main plugin class
+│   │   ├── config/
+│   │   │   └── PluginConfig.java         # Configuration management
+│   │   ├── services/
+│   │   │   ├── ChunkProcessingService.java  # Chunk processing logic
+│   │   │   └── HttpClientService.java        # HTTP client for API calls
+│   │   └── storage/
+│   │       └── StorageService.java       # Chunk tracking storage
+│   └── resources/
+│       ├── manifest.json                 # Plugin manifest
+│       └── config.json                   # Default configuration
+├── build.gradle.kts                      # Build configuration
+└── README.md                             # This file
 ```
 
 ### Testing
 
-```bash
-# Run server with your plugin
-./gradlew runServer
-
-# Run unit tests
-./gradlew test
-
-# Clean test server
-rm -rf run/
-```
-
-### Debugging
+To test the plugin with a local Hytale server:
 
 ```bash
-# Run server in debug mode
-./gradlew runServer -Pdebug
-
-# Then connect your IDE debugger to localhost:5005
-```
-
----
-
-## Customization
-
-### Adding Dependencies
-
-Edit `build.gradle.kts`:
-
-```kotlin
-dependencies {
-    // Hytale API (provided by server)
-    compileOnly(files("libs/hytale-server.jar"))
-    
-    // Your dependencies (will be bundled)
-    implementation("com.google.code.gson:gson:2.10.1")
-    
-    // Test dependencies
-    testImplementation("org.junit.jupiter:junit-jupiter:5.10.0")
-}
-```
-
-### Configuring Server Testing
-
-**Run Hytale Server** - A Gradle plugin to download and run a Hytale server for development and testing purposes. The server files will be located in the `run/` directory of the project. Before starting the server it will compile (shadowJar task) and copy the plugin jar to the server's `plugins/` folder.
-
-**Usage:**
-
-Edit `build.gradle.kts`:
-
-```kotlin
-runHytale {
-    jarUrl = "url to hytale server jar"
-}
-```
-
-Run the server with:
-
-```bash
-# Windows
-gradlew.bat runServer
-
-# Linux/Mac
+# Run server with plugin (requires Hytale server JAR)
 ./gradlew runServer
 ```
-
-**Features:**
-- ✅ Automatic server JAR download and caching
-- ✅ Compiles and deploys your plugin automatically
-- ✅ Starts server with interactive console
-- ✅ One-command workflow: `./gradlew runServer`
-- ✅ Server files in `run/` directory (gitignored)
-
-### Implementing Your Plugin
-
-**Recommended folder structure:**
-```
-src/main/java/com/yourname/yourplugin/
-├── YourPlugin.java          # Main class
-├── commands/                # Commands
-├── listeners/               # Event listeners
-├── services/                # Business logic
-├── storage/                 # Data persistence
-├── config/                  # Configuration
-└── utils/                   # Utilities
-```
-
-**See our documentation for examples:**
-- [Getting Started with Plugins](../Documentation/07-getting-started-with-plugins.md)
-- [Advanced Plugin Patterns](../Documentation/12-advanced-plugin-patterns.md)
-- [Common Plugin Features](../Documentation/14-common-plugin-features.md)
-
----
-
-## CI/CD
-
-This template includes a GitHub Actions workflow that:
-
-1. ✅ Builds your plugin on every push
-2. ✅ Runs tests
-3. ✅ Uploads artifacts
-4. ✅ Creates releases (when you tag)
-
-### Creating a Release
-
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-GitHub Actions will automatically build and create a release with your plugin JAR.
-
----
-
-## Best Practices
-
-### ✅ DO:
-
-- Use the Service-Storage pattern for data management
-- Write unit tests for your business logic
-- Use structured logging (not `System.out.println`)
-- Handle errors gracefully
-- Document your public API
-- Version your releases semantically (1.0.0, 1.1.0, etc.)
-
-### ❌ DON'T:
-
-- Hardcode configuration values
-- Block the main thread with heavy operations
-- Ignore exceptions
-- Use deprecated APIs
-- Commit sensitive data (API keys, passwords)
-
----
 
 ## Troubleshooting
 
-### Build Fails
+### Plugin Not Processing Chunks
 
-```bash
-# Clean and rebuild
-./gradlew clean build --refresh-dependencies
+1. **Check Configuration** - Verify `apiUrl` in `config.json` is correct
+2. **Check Web App** - Ensure the web application worker is running and accessible
+3. **Check Logs** - Enable `debugMode: true` in config.json for detailed logs
+4. **Network Connectivity** - Test if the server can reach the web app: `curl http://your-web-app:3000/api/worker/health`
+
+### Chunks Not Appearing on Map
+
+1. **Worker Status** - Check if the web application worker is processing chunks
+2. **API Endpoint** - Verify the worker API endpoint is correct
+3. **Storage** - Check if tiles are being generated and stored
+4. **Web Interface** - Refresh the web map interface
+
+### Performance Issues
+
+1. **Reduce Batch Size** - Lower `batchSize` in config.json if server is under load
+2. **Increase Timeout** - Increase `requestTimeout` if network is slow
+3. **Check Web App** - Ensure the web application can handle the request rate
+
+## Logs
+
+The plugin logs to the Hytale server console with the `[Worldmap]` prefix:
+
+```
+[Worldmap] Plugin loaded!
+[Worldmap] Plugin enabled!
+[Worldmap] Configuration loaded - API URL: http://localhost:3000/api/worker/process-chunk
+[Worldmap] First load detected - processing all chunks...
+[Worldmap] Found 1234 chunks to process
+[Worldmap] Queued 100 / 1234 chunks for processing
+[Worldmap] Processed 100 chunks (failed: 0)
 ```
 
-### Server Won't Start
+Enable `debugMode: true` for more detailed logging.
 
-1. Check that `jarUrl` in `build.gradle.kts` is correct
-2. Verify Java 25 is installed: `java -version`
-3. Check logs in `run/logs/`
+## Requirements
 
-### Plugin Not Loading
-
-1. Verify `manifest.json` has correct `Main` class
-2. Check server logs for errors
-3. Ensure all dependencies are bundled in JAR
-
----
-
-## Documentation
-
-For detailed guides on plugin development, see:
-
-- [Hytale Modding Documentation](https://github.com/yourusername/hytale-modding/tree/main/Documentation)
-- [Getting Started with Plugins](../Documentation/07-getting-started-with-plugins.md)
-- [Advanced Plugin Patterns](../Documentation/12-advanced-plugin-patterns.md)
-- [Common Plugin Features](../Documentation/14-common-plugin-features.md)
-
----
+- **Hytale Server** - Compatible Hytale server version
+- **Java 25** - Required for building (plugin runs on server's Java version)
+- **Network Access** - Plugin must be able to reach the web application's API
 
 ## Contributing
 
@@ -344,28 +290,19 @@ Contributions are welcome! Please:
 3. Make your changes
 4. Submit a pull request
 
----
+## Related Projects
+
+- **[Worldmap Web Application](https://github.com/suiramdev/hytale-worldmap)** - The web application that receives and processes chunk data
 
 ## License
 
-This template is released under the MIT License. You are free to use it for any purpose.
-
----
+This project is released under the MIT License.
 
 ## Support
 
-- **Issues:** [GitHub Issues](https://github.com/yourusername/hytale-plugin-template/issues)
-- **Documentation:** [Hytale Modding Docs](https://github.com/yourusername/hytale-modding)
-- **Community:** Join the Hytale modding community
+- **Issues:** [GitHub Issues](https://github.com/suiramdev/worldmap-plugin/issues)
+- **Web App:** [Worldmap Web Application](https://github.com/suiramdev/hytale-worldmap)
 
 ---
 
-## Credits
-
-Created by the Hytale modding community.
-
-Based on best practices from production Hytale plugins.
-
----
-
-**Happy Modding! 🎮**
+**Happy Mapping! 🗺️**
