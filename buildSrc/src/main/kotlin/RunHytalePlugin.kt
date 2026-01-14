@@ -119,8 +119,27 @@ open class RunServerTask : DefaultTask() {
             javaArgs.add("-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005")
             println("Debug mode enabled. Connect debugger to port 5005")
         }
-        
+
         javaArgs.addAll(listOf("-jar", jarFile.name))
+
+        // Auto-detect Asset.zip, Assets.zip, or assets.zip in run/ directory
+        val assetZipOptions = listOf("run/Asset.zip", "run/Assets.zip", "run/assets.zip")
+        var assetZip: File? = null
+        for (option in assetZipOptions) {
+            val candidate = File(project.rootDir, option)
+            if (candidate.exists() && candidate.isFile) {
+                assetZip = candidate
+                break
+            }
+        }
+        
+        if (assetZip != null) {
+            javaArgs.add("--assets")
+            javaArgs.add(assetZip.absolutePath)
+            println("Assets file found, passing to server: ${assetZip.absolutePath}")
+        } else {
+            println("No Asset.zip, Assets.zip, or assets.zip found in run/ directory")
+        }
 
         // Start the server process
         val process = ProcessBuilder("java", *javaArgs.toTypedArray())
@@ -128,12 +147,13 @@ open class RunServerTask : DefaultTask() {
             .start()
 
         // Handle graceful shutdown
-        project.gradle.buildFinished {
+        val shutdownHook = Thread {
             if (process.isAlive) {
                 println("\nStopping server...")
                 process.destroy()
             }
         }
+        Runtime.getRuntime().addShutdownHook(shutdownHook)
 
         // Forward stdout to console
         Thread {
@@ -161,6 +181,14 @@ open class RunServerTask : DefaultTask() {
 
         // Wait for server to exit
         val exitCode = process.waitFor()
+        
+        // Remove shutdown hook since process exited normally
+        try {
+            Runtime.getRuntime().removeShutdownHook(shutdownHook)
+        } catch (e: IllegalStateException) {
+            // Shutdown already in progress, ignore
+        }
+        
         println("Server exited with code $exitCode")
     }
 }

@@ -34,18 +34,76 @@ The web application provides:
 - **Hytale Server** - A running Hytale server instance
 - **Java 25 JDK** - Required to build the plugin
 - **Worldmap Web Application** - The [web application](https://github.com/suiramdev/hytale-worldmap) must be running and accessible
-- **Hytale Server JAR** - You need to obtain `hytale-server.jar` and place it in `libs/hytale-server.jar` (see [Development](#development) section)
+- **Hytale Server JAR** - You need to obtain `HytaleServer.jar` and place it in `libs/HytaleServer.jar` (see [First-Time Setup](#first-time-setup) section)
+
+## First-Time Setup
+
+When setting up the repository for the first time, use the `setup.sh` script to automatically download or copy the required files:
+
+```bash
+./scripts/setup.sh
+```
+
+The script will prompt you for:
+
+1. **HytaleServer.jar** - You can provide either:
+   - A URL (e.g., `https://example.com/HytaleServer.jar`)
+   - A local file path (e.g., `/path/to/HytaleServer.jar`)
+   
+   The file will be copied to `libs/HytaleServer.jar`
+
+2. **Asset.zip** - You can provide either:
+   - A URL (e.g., `https://example.com/Asset.zip`)
+   - A local file path (e.g., `/path/to/Asset.zip`)
+   
+   The file will be copied to `run/Asset.zip`
+
+The script automatically:
+- Creates the `libs/` and `run/` directories if they don't exist
+- Downloads files from URLs using `curl` or `wget`
+- Copies files from local paths
+- Provides clear feedback on the setup process
+
+**Example:**
+```bash
+$ ./scripts/setup.sh
+Please provide the HytaleServer.jar:
+You can provide either:
+  - A URL (e.g., https://example.com/HytaleServer.jar)
+  - A file path (e.g., /path/to/HytaleServer.jar)
+HytaleServer.jar (URL or path): https://example.com/HytaleServer.jar
+Downloading from URL: https://example.com/HytaleServer.jar
+✓ Successfully copied HytaleServer.jar
+
+Please provide the Asset.zip:
+You can provide either:
+  - A URL (e.g., https://example.com/Asset.zip)
+  - A file path (e.g., /path/to/Asset.zip)
+Asset.zip (URL or path): /Users/me/Downloads/Asset.zip
+Copying from: /Users/me/Downloads/Asset.zip
+✓ Successfully copied Asset.zip
+
+✓ Setup completed successfully!
+  - HytaleServer.jar is in: libs
+  - Asset.zip is in: run
+```
 
 ## Quick Start
 
-### 0. Obtain Hytale Server JAR (Required for Building)
+### 0. Initial Setup (First Time Only)
 
-Before building, you need to obtain `hytale-server.jar` and place it in `libs/hytale-server.jar`. This JAR file is not included in the repository and must be obtained separately.
+If you haven't run the setup script yet, do so now:
+
+```bash
+./scripts/setup.sh
+```
+
+This will set up the required `HytaleServer.jar` and `Asset.zip` files. See the [First-Time Setup](#first-time-setup) section above for details.
 
 **For AI Coding Assistance:** If you're using AI coding assistants, you can decompile the JAR for better code completion:
 
 ```bash
-./scripts/decompile.sh libs/hytale-server.jar
+./scripts/decompile.sh libs/HytaleServer.jar
 ```
 
 This decompiles the JAR to `decompiled/` for reference. See the [Development](#development) section for more details.
@@ -169,12 +227,24 @@ If your web application is running on a different machine:
 
 ### Setting Up for Development
 
-Before building the plugin, you need to obtain the Hytale server JAR file:
+Before building the plugin, you need to obtain the required files. The easiest way is to use the setup script:
 
-1. **Obtain `hytale-server.jar`** - You need to get the Hytale server JAR file yourself (it's not included in this repository)
-2. **Place it in `libs/`** - Copy the JAR file to `libs/hytale-server.jar`
+```bash
+./scripts/setup.sh
+```
 
-The plugin uses this JAR file as a compile-time dependency to access Hytale's API classes.
+This will prompt you for `HytaleServer.jar` and `Asset.zip` and automatically place them in the correct locations. See the [First-Time Setup](#first-time-setup) section for details.
+
+**Manual Setup (Alternative):**
+
+If you prefer to set up manually:
+
+1. **Obtain `HytaleServer.jar`** - Get the Hytale server JAR file (it's not included in this repository)
+2. **Place it in `libs/`** - Copy the JAR file to `libs/HytaleServer.jar`
+3. **Obtain `Asset.zip`** - Get the Asset.zip file
+4. **Place it in `run/`** - Copy the file to `run/Asset.zip`
+
+The plugin uses `HytaleServer.jar` as a compile-time dependency to access Hytale's API classes.
 
 ### Decompiling for AI Coding Assistance
 
@@ -182,11 +252,11 @@ If you're using AI coding assistants (like Cursor, GitHub Copilot, etc.), you ca
 
 ```bash
 # Decompile the Hytale server JAR
-./scripts/decompile.sh libs/hytale-server.jar
+./scripts/decompile.sh libs/HytaleServer.jar
 ```
 
 This will:
-- Decompile `libs/hytale-server.jar` using CFR (Java decompiler)
+- Decompile `libs/HytaleServer.jar` using CFR (Java decompiler)
 - Output the decompiled source code to `decompiled/`
 - Make Hytale API classes available for your IDE and AI assistants
 
@@ -202,8 +272,10 @@ This will:
 git clone https://github.com/suiramdev/worldmap-plugin.git
 cd worldmap-plugin
 
-# Ensure hytale-server.jar is in libs/
-# Then build the plugin
+# Run the setup script to obtain required files
+./scripts/setup.sh
+
+# Build the plugin
 ./gradlew shadowJar
 ```
 
@@ -234,8 +306,16 @@ To test the plugin with a local Hytale server:
 
 ```bash
 # Run server with plugin (requires Hytale server JAR)
+# The server will auto-detect Asset.zip, Assets.zip, or assets.zip in run/ directory if present
 ./gradlew runServer
 ```
+
+The `runServer` task will automatically look for assets files in the `run/` directory with the following names (in order of priority):
+- `run/Asset.zip`
+- `run/Assets.zip`
+- `run/assets.zip`
+
+If found, the assets file will be automatically passed to the Hytale server.
 
 ## Troubleshooting
 
