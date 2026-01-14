@@ -1,17 +1,17 @@
 {
-  "Group": "TemplatePlugin",
-  "Name": "TemplatePlugin",
+  "Group": "Worldmap",
+  "Name": "Worldmap",
   "Version": "1.0.0",
-  "Description": "A Hytale plugin template",
+  "Description": "A Hytale worldmap plugin",
   "Authors": [
     {
-      "Name": "YourName",
-      "Email": "your.email@example.com",
-      "Url": "https://your-website.com"
+      "Name": "suiramdev",
+      "Email": "contact@suiram.dev",
+      "Url": "https://suiram.dev"
     }
   ],
-  "Website": "https://github.com/yourusername/hytale-plugin-template",
-  "Main": "com.example.templateplugin.TemplatePlugin",
+  "Website": "https://github.com/suiramdev/hytale-worldmap-plugin",
+  "Main": "com.worldmap.worldmap.Worldmap",
   "ServerVersion": "*",
   "Dependencies": {},
   "OptionalDependencies": {},
