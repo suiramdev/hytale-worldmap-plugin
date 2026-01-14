@@ -1,8 +1,8 @@
 {
-  "Group": "Worldmap",
+  "Group": "suiramdev",
   "Name": "Worldmap",
   "Version": "1.0.0",
-  "Description": "A Hytale worldmap plugin",
+  "Description": "A plugin to view the map on the web",
   "Authors": [
     {
       "Name": "suiramdev",
@@ -11,9 +11,11 @@
     }
   ],
   "Website": "https://github.com/suiramdev/hytale-worldmap-plugin",
-  "Main": "com.worldmap.worldmap.Worldmap",
+  "Main": "com.suiramdev.worldmap.Main",
   "ServerVersion": "*",
-  "Dependencies": {},
+  "Dependencies": {
+    "Hytale:EntityModule": "*"
+  },
   "OptionalDependencies": {},
   "DisabledByDefault": false
 }

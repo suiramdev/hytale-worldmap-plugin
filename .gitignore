@@ -55,3 +55,6 @@ desktop.ini
 *.bak
 *.swp
 *~
+
+# Decompiled files
+decompiled/
