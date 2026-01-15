@@ -31,12 +31,13 @@ public class ChunkProcessingService {
     /**
      * Process a single chunk
      * 
-     * @param chunkX Chunk X coordinate
-     * @param chunkZ Chunk Z coordinate
-     * @param chunk  The chunk object (placeholder - will be replaced with actual
-     *               Hytale Chunk type)
+     * @param worldId World identifier
+     * @param chunkX  Chunk X coordinate
+     * @param chunkZ  Chunk Z coordinate
+     * @param chunk   The chunk object (placeholder - will be replaced with actual
+     *                Hytale Chunk type)
      */
-    public CompletableFuture<Boolean> processChunk(int chunkX, int chunkZ, Object chunk) {
+    public CompletableFuture<Boolean> processChunk(String worldId, int chunkX, int chunkZ, Object chunk) {
         // Check if already processed
         if (storage.isChunkProcessed(chunkX, chunkZ)) {
             if (debugMode) {
@@ -48,10 +49,10 @@ public class ChunkProcessingService {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 // Extract chunk data
-                ChunkData chunkData = extractChunkData(chunk, chunkX, chunkZ);
+                ChunkData chunkData = extractChunkData(chunk, worldId, chunkX, chunkZ);
 
                 // Send to API
-                return httpClient.sendChunkData(chunkX, chunkZ, chunkData)
+                return httpClient.sendChunkData(chunkData)
                         .thenApply(success -> {
                             if (success) {
                                 storage.markChunkProcessed(chunkX, chunkZ);
@@ -86,12 +87,14 @@ public class ChunkProcessingService {
      * Extract chunk data from a chunk object
      * 
      * @param chunk  The WorldChunk object from Hytale
-     * @param chunkX Chunk X coordinate
-     * @param chunkZ Chunk Z coordinate
+     * @param worldId World identifier
+     * @param chunkX  Chunk X coordinate
+     * @param chunkZ  Chunk Z coordinate
      * @return ChunkData object containing extracted data
      */
-    private ChunkData extractChunkData(Object chunk, int chunkX, int chunkZ) {
+    private ChunkData extractChunkData(Object chunk, String worldId, int chunkX, int chunkZ) {
         ChunkData data = new ChunkData();
+        data.worldId = worldId;
         data.chunkX = chunkX;
         data.chunkZ = chunkZ;
         data.timestamp = System.currentTimeMillis();
@@ -180,6 +183,7 @@ public class ChunkProcessingService {
      * Chunk data structure for API
      */
     public static class ChunkData {
+        public String worldId;
         public int chunkX;
         public int chunkZ;
         public long timestamp;

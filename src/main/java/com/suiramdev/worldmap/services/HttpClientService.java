@@ -40,27 +40,27 @@ public class HttpClientService {
     /**
      * Send chunk data to the API
      * 
-     * @param chunkX    Chunk X coordinate
-     * @param chunkZ    Chunk Z coordinate
-     * @param chunkData Chunk data object
+     * @param chunkData Chunk data object containing all required fields
      * @return CompletableFuture that completes with true on success, false on
      *         failure
      */
-    public CompletableFuture<Boolean> sendChunkData(int chunkX, int chunkZ, Object chunkData) {
+    public CompletableFuture<Boolean> sendChunkData(Object chunkData) {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 // Acquire permit for rate limiting
                 rateLimiter.acquire();
 
                 try {
-                    return sendChunkDataWithRetry(chunkX, chunkZ, chunkData);
+                    return sendChunkDataWithRetry(chunkData);
                 } finally {
                     rateLimiter.release();
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                if (debugMode) {
-                    System.err.println("[Worldmap] Request interrupted for chunk (" + chunkX + "," + chunkZ + ")");
+                if (debugMode && chunkData instanceof com.suiramdev.worldmap.services.ChunkProcessingService.ChunkData) {
+                    com.suiramdev.worldmap.services.ChunkProcessingService.ChunkData data = 
+                        (com.suiramdev.worldmap.services.ChunkProcessingService.ChunkData) chunkData;
+                    System.err.println("[Worldmap] Request interrupted for chunk (" + data.chunkX + "," + data.chunkZ + ")");
                 }
                 return false;
             }
@@ -70,14 +70,19 @@ public class HttpClientService {
     /**
      * Send chunk data with retry logic
      */
-    private boolean sendChunkDataWithRetry(int chunkX, int chunkZ, Object chunkData) {
-        // Create request payload
-        ChunkRequest request = new ChunkRequest();
-        request.chunkX = chunkX;
-        request.chunkZ = chunkZ;
-        request.chunkData = chunkData;
-
-        String jsonBody = gson.toJson(request);
+    private boolean sendChunkDataWithRetry(Object chunkData) {
+        // Serialize chunk data directly - it already has all required fields
+        String jsonBody = gson.toJson(chunkData);
+        
+        // Extract chunk coordinates for logging
+        int chunkX = 0;
+        int chunkZ = 0;
+        if (chunkData instanceof com.suiramdev.worldmap.services.ChunkProcessingService.ChunkData) {
+            com.suiramdev.worldmap.services.ChunkProcessingService.ChunkData data = 
+                (com.suiramdev.worldmap.services.ChunkProcessingService.ChunkData) chunkData;
+            chunkX = data.chunkX;
+            chunkZ = data.chunkZ;
+        }
 
         int attempt = 0;
         while (attempt < maxRetries) {
@@ -136,14 +141,5 @@ public class HttpClientService {
         }
 
         return false;
-    }
-
-    /**
-     * Request payload structure
-     */
-    private static class ChunkRequest {
-        int chunkX;
-        int chunkZ;
-        Object chunkData;
     }
 }

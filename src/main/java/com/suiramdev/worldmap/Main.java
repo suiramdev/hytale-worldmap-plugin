@@ -166,6 +166,9 @@ public class Main extends JavaPlugin {
             int totalChunks = chunkIndexes.size();
             System.out.println("[Worldmap] Found " + totalChunks + " chunks to process");
 
+            // Get world information
+            String worldId = world.getName();
+
             // Process each chunk
             int processed = 0;
             for (long chunkIndex : chunkIndexes) {
@@ -176,7 +179,7 @@ public class Main extends JavaPlugin {
                 world.getNonTickingChunkAsync(chunkIndex)
                         .thenAccept(chunk -> {
                             if (chunk != null) {
-                                chunkProcessor.processChunk(chunkX, chunkZ, chunk);
+                                chunkProcessor.processChunk(worldId, chunkX, chunkZ, chunk);
                             } else {
                                 if (config != null && config.isDebugMode()) {
                                     System.out.println(
