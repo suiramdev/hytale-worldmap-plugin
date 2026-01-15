@@ -65,6 +65,7 @@ public class Main extends JavaPlugin {
             // Initialize HTTP client service
             httpClient = new HttpClientService(
                     config.getApiUrl(),
+                    config.getApiKey(),
                     config.getRequestTimeout(),
                     config.getMaxRetries(),
                     config.isDebugMode());

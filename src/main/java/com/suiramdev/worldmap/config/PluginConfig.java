@@ -14,6 +14,7 @@ public class PluginConfig {
     private static final String CONFIG_FILE = "config.json";
 
     private String apiUrl = "http://localhost:3000/api/worker/process-chunk";
+    private String apiKey = "";
     private int requestTimeout = 30000;
     private int maxRetries = 3;
     private int batchSize = 10;
@@ -45,6 +46,8 @@ public class PluginConfig {
             if (data != null) {
                 if (data.apiUrl != null)
                     this.apiUrl = data.apiUrl;
+                if (data.apiKey != null)
+                    this.apiKey = data.apiKey;
                 if (data.requestTimeout > 0)
                     this.requestTimeout = data.requestTimeout;
                 if (data.maxRetries > 0)
@@ -73,6 +76,7 @@ public class PluginConfig {
 
             ConfigData data = new ConfigData();
             data.apiUrl = this.apiUrl;
+            data.apiKey = this.apiKey;
             data.requestTimeout = this.requestTimeout;
             data.maxRetries = this.maxRetries;
             data.batchSize = this.batchSize;
@@ -88,6 +92,10 @@ public class PluginConfig {
 
     public String getApiUrl() {
         return apiUrl;
+    }
+
+    public String getApiKey() {
+        return apiKey;
     }
 
     public int getRequestTimeout() {
@@ -111,6 +119,7 @@ public class PluginConfig {
      */
     private static class ConfigData {
         String apiUrl;
+        String apiKey;
         int requestTimeout;
         int maxRetries;
         int batchSize;

@@ -15,6 +15,7 @@ import java.util.concurrent.Semaphore;
  */
 public class HttpClientService {
     private final String apiUrl;
+    private final String apiKey;
     private final int requestTimeout;
     private final int maxRetries;
     private final boolean debugMode;
@@ -23,8 +24,9 @@ public class HttpClientService {
     private final Gson gson;
     private final Semaphore rateLimiter; // Limit concurrent requests (max 5)
 
-    public HttpClientService(String apiUrl, int requestTimeout, int maxRetries, boolean debugMode) {
+    public HttpClientService(String apiUrl, String apiKey, int requestTimeout, int maxRetries, boolean debugMode) {
         this.apiUrl = apiUrl;
+        this.apiKey = apiKey;
         this.requestTimeout = requestTimeout;
         this.maxRetries = maxRetries;
         this.debugMode = debugMode;
@@ -57,10 +59,11 @@ public class HttpClientService {
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                if (debugMode && chunkData instanceof com.suiramdev.worldmap.services.ChunkProcessingService.ChunkData) {
-                    com.suiramdev.worldmap.services.ChunkProcessingService.ChunkData data = 
-                        (com.suiramdev.worldmap.services.ChunkProcessingService.ChunkData) chunkData;
-                    System.err.println("[Worldmap] Request interrupted for chunk (" + data.chunkX + "," + data.chunkZ + ")");
+                if (debugMode
+                        && chunkData instanceof com.suiramdev.worldmap.services.ChunkProcessingService.ChunkData) {
+                    com.suiramdev.worldmap.services.ChunkProcessingService.ChunkData data = (com.suiramdev.worldmap.services.ChunkProcessingService.ChunkData) chunkData;
+                    System.err.println(
+                            "[Worldmap] Request interrupted for chunk (" + data.chunkX + "," + data.chunkZ + ")");
                 }
                 return false;
             }
@@ -73,13 +76,12 @@ public class HttpClientService {
     private boolean sendChunkDataWithRetry(Object chunkData) {
         // Serialize chunk data directly - it already has all required fields
         String jsonBody = gson.toJson(chunkData);
-        
+
         // Extract chunk coordinates for logging
         int chunkX = 0;
         int chunkZ = 0;
         if (chunkData instanceof com.suiramdev.worldmap.services.ChunkProcessingService.ChunkData) {
-            com.suiramdev.worldmap.services.ChunkProcessingService.ChunkData data = 
-                (com.suiramdev.worldmap.services.ChunkProcessingService.ChunkData) chunkData;
+            com.suiramdev.worldmap.services.ChunkProcessingService.ChunkData data = (com.suiramdev.worldmap.services.ChunkProcessingService.ChunkData) chunkData;
             chunkX = data.chunkX;
             chunkZ = data.chunkZ;
         }
@@ -87,12 +89,18 @@ public class HttpClientService {
         int attempt = 0;
         while (attempt < maxRetries) {
             try {
-                HttpRequest httpRequest = HttpRequest.newBuilder()
+                HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
                         .uri(URI.create(apiUrl))
                         .header("Content-Type", "application/json")
                         .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
-                        .timeout(Duration.ofMillis(requestTimeout))
-                        .build();
+                        .timeout(Duration.ofMillis(requestTimeout));
+
+                // Add Authorization header with API key if provided
+                if (apiKey != null && !apiKey.isEmpty()) {
+                    requestBuilder.header("Authorization", apiKey);
+                }
+
+                HttpRequest httpRequest = requestBuilder.build();
 
                 HttpResponse<String> response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
 

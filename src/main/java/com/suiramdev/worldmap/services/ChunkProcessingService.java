@@ -31,13 +31,12 @@ public class ChunkProcessingService {
     /**
      * Process a single chunk
      * 
-     * @param worldId World identifier
-     * @param chunkX  Chunk X coordinate
-     * @param chunkZ  Chunk Z coordinate
-     * @param chunk   The chunk object (placeholder - will be replaced with actual
-     *                Hytale Chunk type)
+     * @param chunkX Chunk X coordinate
+     * @param chunkZ Chunk Z coordinate
+     * @param chunk  The chunk object (placeholder - will be replaced with actual
+     *               Hytale Chunk type)
      */
-    public CompletableFuture<Boolean> processChunk(String worldId, int chunkX, int chunkZ, Object chunk) {
+    public CompletableFuture<Boolean> processChunk(int chunkX, int chunkZ, Object chunk) {
         // Check if already processed
         if (storage.isChunkProcessed(chunkX, chunkZ)) {
             if (debugMode) {
@@ -49,7 +48,7 @@ public class ChunkProcessingService {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 // Extract chunk data
-                ChunkData chunkData = extractChunkData(chunk, worldId, chunkX, chunkZ);
+                ChunkData chunkData = extractChunkData(chunk, chunkX, chunkZ);
 
                 // Send to API
                 return httpClient.sendChunkData(chunkData)
@@ -87,14 +86,12 @@ public class ChunkProcessingService {
      * Extract chunk data from a chunk object
      * 
      * @param chunk  The WorldChunk object from Hytale
-     * @param worldId World identifier
-     * @param chunkX  Chunk X coordinate
-     * @param chunkZ  Chunk Z coordinate
+     * @param chunkX Chunk X coordinate
+     * @param chunkZ Chunk Z coordinate
      * @return ChunkData object containing extracted data
      */
-    private ChunkData extractChunkData(Object chunk, String worldId, int chunkX, int chunkZ) {
+    private ChunkData extractChunkData(Object chunk, int chunkX, int chunkZ) {
         ChunkData data = new ChunkData();
-        data.worldId = worldId;
         data.chunkX = chunkX;
         data.chunkZ = chunkZ;
         data.timestamp = System.currentTimeMillis();
@@ -103,7 +100,8 @@ public class ChunkProcessingService {
             // Cast to WorldChunk
             WorldChunk worldChunk = (WorldChunk) chunk;
 
-            // Extract block data (32x320x32 - Hytale chunks are 32x32 blocks, 320 blocks tall)
+            // Extract block data (32x320x32 - Hytale chunks are 32x32 blocks, 320 blocks
+            // tall)
             int[][][] blocks = new int[32][320][32];
             short[][] heightMap = new short[32][32];
             int[][] tintMap = new int[32][32];
@@ -115,7 +113,7 @@ public class ChunkProcessingService {
                     heightMap[x][z] = worldChunk.getHeight(x, z);
                     // Get tint map
                     tintMap[x][z] = worldChunk.getTint(x, z);
-                    
+
                     // Extract blocks for this column (only up to height to save space)
                     int maxY = Math.min(320, heightMap[x][z] + 10); // Include a bit above height
                     for (int y = 0; y < maxY; y++) {
@@ -140,7 +138,8 @@ public class ChunkProcessingService {
             }
 
         } catch (Exception e) {
-            System.err.println("[Worldmap] Error extracting chunk data for (" + chunkX + "," + chunkZ + "): " + e.getMessage());
+            System.err.println(
+                    "[Worldmap] Error extracting chunk data for (" + chunkX + "," + chunkZ + "): " + e.getMessage());
             if (debugMode) {
                 e.printStackTrace();
             }
@@ -183,7 +182,6 @@ public class ChunkProcessingService {
      * Chunk data structure for API
      */
     public static class ChunkData {
-        public String worldId;
         public int chunkX;
         public int chunkZ;
         public long timestamp;
