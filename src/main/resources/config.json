@@ -2,7 +2,7 @@
   "pluginName": "Worldmap",
   "version": "1.0.0",
   "apiUrl": "http://localhost:3000/api/worker/process-chunk",
-  "apiKey": "",
+  "apiKey": "wm_015bd271a3bc53ded53ff3573dbb7cf2d4ed1857ff44cd25423dcd8b5f4f666a",
   "requestTimeout": 30000,
   "maxRetries": 3,
   "batchSize": 10,

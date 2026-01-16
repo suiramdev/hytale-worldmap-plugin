@@ -34,7 +34,6 @@ public class StorageService {
 
         if (!storageFile.exists()) {
             // First load - no storage file exists
-            data.firstLoad = true;
             data.processedChunks = new HashSet<>();
             return;
         }
@@ -51,7 +50,6 @@ public class StorageService {
         } catch (IOException e) {
             System.err.println("[Worldmap] Failed to load storage: " + e.getMessage());
             System.err.println("[Worldmap] Treating as first load");
-            data.firstLoad = true;
             data.processedChunks = new HashSet<>();
         }
     }
@@ -74,21 +72,6 @@ public class StorageService {
         } catch (IOException e) {
             System.err.println("[Worldmap] Failed to save storage: " + e.getMessage());
         }
-    }
-
-    /**
-     * Check if this is the first load
-     */
-    public boolean isFirstLoad() {
-        return data.firstLoad;
-    }
-
-    /**
-     * Mark that chunks have been loaded (no longer first load)
-     */
-    public void markAsLoaded() {
-        data.firstLoad = false;
-        saveStorage();
     }
 
     /**
@@ -120,7 +103,6 @@ public class StorageService {
      * Internal class for JSON storage
      */
     private static class StorageData {
-        boolean firstLoad = true;
         Set<String> processedChunks = new HashSet<>();
     }
 }

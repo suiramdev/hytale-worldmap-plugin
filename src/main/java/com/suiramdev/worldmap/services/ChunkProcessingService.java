@@ -1,9 +1,14 @@
 package com.suiramdev.worldmap.services;
 
+import com.hypixel.hytale.assetstore.map.BlockTypeAssetMap;
+import com.hypixel.hytale.server.core.asset.type.blocktype.config.BlockType;
+import com.hypixel.hytale.server.core.asset.type.blocktype.config.BlockTypeTextures;
 import com.hypixel.hytale.server.core.universe.world.chunk.BlockChunk;
 import com.hypixel.hytale.server.core.universe.world.chunk.WorldChunk;
 import com.hypixel.hytale.server.core.universe.world.chunk.environment.EnvironmentChunk;
 import com.suiramdev.worldmap.storage.StorageService;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -33,8 +38,7 @@ public class ChunkProcessingService {
      * 
      * @param chunkX Chunk X coordinate
      * @param chunkZ Chunk Z coordinate
-     * @param chunk  The chunk object (placeholder - will be replaced with actual
-     *               Hytale Chunk type)
+     * @param chunk  The chunk object
      */
     public CompletableFuture<Boolean> processChunk(int chunkX, int chunkZ, Object chunk) {
         // Check if already processed
@@ -106,6 +110,12 @@ public class ChunkProcessingService {
             short[][] heightMap = new short[32][32];
             int[][] tintMap = new int[32][32];
 
+            // Map to store block textures (blockId -> texture info) to avoid duplication
+            Map<Integer, BlockTextureInfo> blockTextures = new HashMap<>();
+
+            // Get BlockType asset map for texture lookup
+            BlockTypeAssetMap<String, BlockType> blockTypeAssetMap = BlockType.getAssetMap();
+
             // Extract block data
             for (int x = 0; x < 32; x++) {
                 for (int z = 0; z < 32; z++) {
@@ -117,7 +127,16 @@ public class ChunkProcessingService {
                     // Extract blocks for this column (only up to height to save space)
                     int maxY = Math.min(320, heightMap[x][z] + 10); // Include a bit above height
                     for (int y = 0; y < maxY; y++) {
-                        blocks[x][y][z] = worldChunk.getBlock(x, y, z);
+                        int blockId = worldChunk.getBlock(x, y, z);
+                        blocks[x][y][z] = blockId;
+
+                        // Extract texture info for this block ID if not already stored
+                        if (!blockTextures.containsKey(blockId)) {
+                            BlockTextureInfo textureInfo = extractBlockTextureInfo(blockId, blockTypeAssetMap);
+                            if (textureInfo != null) {
+                                blockTextures.put(blockId, textureInfo);
+                            }
+                        }
                     }
                 }
             }
@@ -125,6 +144,7 @@ public class ChunkProcessingService {
             data.blocks = blocks;
             data.heightMap = heightMap;
             data.tintMap = tintMap;
+            data.blockTextures = blockTextures;
 
             // Extract environment/biome data if available
             BlockChunk blockChunk = worldChunk.getBlockChunk();
@@ -147,9 +167,69 @@ public class ChunkProcessingService {
             data.blocks = new int[32][320][32];
             data.heightMap = new short[32][32];
             data.tintMap = new int[32][32];
+            data.blockTextures = new HashMap<>();
         }
 
         return data;
+    }
+
+    /**
+     * Extract texture information for a block ID
+     * 
+     * @param blockId           The block ID
+     * @param blockTypeAssetMap The BlockType asset map
+     * @return BlockTextureInfo containing texture paths, or null if block type not
+     *         found
+     */
+    private BlockTextureInfo extractBlockTextureInfo(int blockId,
+            BlockTypeAssetMap<String, BlockType> blockTypeAssetMap) {
+        try {
+            BlockType blockType = blockTypeAssetMap.getAsset(blockId);
+            if (blockType == null) {
+                return null;
+            }
+
+            BlockTypeTextures[] textures = blockType.getTextures();
+            if (textures == null || textures.length == 0) {
+                // Use default unknown texture
+                return new BlockTextureInfo(
+                        "BlockTextures/Unknown.png",
+                        "BlockTextures/Unknown.png",
+                        "BlockTextures/Unknown.png",
+                        "BlockTextures/Unknown.png",
+                        "BlockTextures/Unknown.png",
+                        "BlockTextures/Unknown.png",
+                        false);
+            }
+
+            // Use the first texture variant (most common case)
+            BlockTypeTextures firstTexture = textures[0];
+
+            // Check if this block should be tinted using BiomeTint properties from
+            // BlockType
+            // A block should be tinted if any of its biomeTint values are non-zero
+            boolean shouldTint = blockType.getBiomeTintUp() != 0 ||
+                    blockType.getBiomeTintDown() != 0 ||
+                    blockType.getBiomeTintNorth() != 0 ||
+                    blockType.getBiomeTintSouth() != 0 ||
+                    blockType.getBiomeTintWest() != 0 ||
+                    blockType.getBiomeTintEast() != 0;
+
+            return new BlockTextureInfo(
+                    firstTexture.getUp(),
+                    firstTexture.getDown(),
+                    firstTexture.getNorth(),
+                    firstTexture.getSouth(),
+                    firstTexture.getEast(),
+                    firstTexture.getWest(),
+                    shouldTint);
+        } catch (Exception e) {
+            if (debugMode) {
+                System.err
+                        .println("[Worldmap] Error extracting texture for block ID " + blockId + ": " + e.getMessage());
+            }
+            return null;
+        }
     }
 
     /**
@@ -188,6 +268,35 @@ public class ChunkProcessingService {
         public int[][][] blocks; // 32x320x32 array of block IDs
         public short[][] heightMap; // 32x32 array of height values
         public int[][] tintMap; // 32x32 array of tint values
+        public Map<Integer, BlockTextureInfo> blockTextures; // Map of blockId -> texture paths
         public boolean hasEnvironmentData = false;
+    }
+
+    /**
+     * Block texture information structure
+     */
+    public static class BlockTextureInfo {
+        public String up;
+        public String down;
+        public String north;
+        public String south;
+        public String east;
+        public String west;
+        public boolean shouldTint; // Whether this block should receive biome tinting
+
+        public BlockTextureInfo() {
+            this.shouldTint = false;
+        }
+
+        public BlockTextureInfo(String up, String down, String north, String south, String east, String west,
+                boolean shouldTint) {
+            this.up = up;
+            this.down = down;
+            this.north = north;
+            this.south = south;
+            this.east = east;
+            this.west = west;
+            this.shouldTint = shouldTint;
+        }
     }
 }

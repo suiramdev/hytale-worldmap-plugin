@@ -23,6 +23,7 @@ public class HttpClientService {
     private final HttpClient httpClient;
     private final Gson gson;
     private final Semaphore rateLimiter; // Limit concurrent requests (max 5)
+    private static boolean connectionWarningShown = false; // Track if we've shown the connection warning
 
     public HttpClientService(String apiUrl, String apiKey, int requestTimeout, int maxRetries, boolean debugMode) {
         this.apiUrl = apiUrl;
@@ -74,9 +75,6 @@ public class HttpClientService {
      * Send chunk data with retry logic
      */
     private boolean sendChunkDataWithRetry(Object chunkData) {
-        // Serialize chunk data directly - it already has all required fields
-        String jsonBody = gson.toJson(chunkData);
-
         // Extract chunk coordinates for logging
         int chunkX = 0;
         int chunkZ = 0;
@@ -86,11 +84,39 @@ public class HttpClientService {
             chunkZ = data.chunkZ;
         }
 
+        // Validate API URL
+        if (apiUrl == null || apiUrl.isEmpty()) {
+            System.err.println("[Worldmap] API URL is not configured for chunk (" + chunkX + "," + chunkZ + ")");
+            return false;
+        }
+
+        // Serialize chunk data directly - it already has all required fields
+        String jsonBody;
+        try {
+            jsonBody = gson.toJson(chunkData);
+        } catch (Exception e) {
+            System.err.println("[Worldmap] Failed to serialize chunk data for (" + chunkX + "," + chunkZ + "): " 
+                    + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
+            if (debugMode) {
+                e.printStackTrace();
+            }
+            return false;
+        }
+
         int attempt = 0;
         while (attempt < maxRetries) {
             try {
+                // Validate and create URI
+                URI uri;
+                try {
+                    uri = URI.create(apiUrl);
+                } catch (IllegalArgumentException e) {
+                    System.err.println("[Worldmap] Invalid API URL: " + apiUrl + " for chunk (" + chunkX + "," + chunkZ + ")");
+                    return false;
+                }
+
                 HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
-                        .uri(URI.create(apiUrl))
+                        .uri(uri)
                         .header("Content-Type", "application/json")
                         .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
                         .timeout(Duration.ofMillis(requestTimeout));
@@ -102,25 +128,68 @@ public class HttpClientService {
 
                 HttpRequest httpRequest = requestBuilder.build();
 
+                // Log request details
+                int jsonSize = jsonBody.length();
+                System.out.println("[Worldmap] Sending chunk (" + chunkX + "," + chunkZ + ") to " + apiUrl 
+                        + " (attempt " + (attempt + 1) + "/" + maxRetries + ", payload size: " + jsonSize + " bytes)");
+
                 HttpResponse<String> response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
 
                 int statusCode = response.statusCode();
+                String responseBody = response.body();
+                
+                // Log response details
+                System.out.println("[Worldmap] API response for chunk (" + chunkX + "," + chunkZ + "): Status " + statusCode);
+                
+                if (responseBody != null && !responseBody.isEmpty()) {
+                    // Truncate very long responses for readability
+                    String bodyPreview = responseBody.length() > 500 
+                        ? responseBody.substring(0, 500) + "... (truncated)" 
+                        : responseBody;
+                    System.out.println("[Worldmap] API response body: " + bodyPreview);
+                } else {
+                    System.out.println("[Worldmap] API response body: (empty)");
+                }
+                
+                if (debugMode) {
+                    // Log response headers in debug mode
+                    System.out.println("[Worldmap] Response headers: " + response.headers().map());
+                }
+
                 if (statusCode >= 200 && statusCode < 300) {
-                    if (debugMode) {
-                        System.out.println("[Worldmap] Successfully sent chunk (" + chunkX + "," + chunkZ
-                                + ") - Status: " + statusCode);
-                    }
+                    System.out.println("[Worldmap] Successfully sent chunk (" + chunkX + "," + chunkZ
+                            + ") - Status: " + statusCode);
                     return true;
                 } else {
-                    if (debugMode || attempt == maxRetries - 1) {
-                        System.err.println("[Worldmap] API returned error status " + statusCode + " for chunk ("
-                                + chunkX + "," + chunkZ + ")");
+                    System.err.println("[Worldmap] API returned error status " + statusCode + " for chunk ("
+                            + chunkX + "," + chunkZ + ")");
+                    if (responseBody != null && !responseBody.isEmpty()) {
+                        System.err.println("[Worldmap] Error response body: " + responseBody);
                     }
                 }
             } catch (IOException e) {
+                String errorMsg = e.getMessage();
+                if (errorMsg == null || errorMsg.isEmpty()) {
+                    errorMsg = e.getClass().getSimpleName() + " (no message)";
+                    // Common causes for null message: connection refused, unreachable host
+                    if (e.getClass().getSimpleName().contains("Connect") || 
+                        e.getClass().getSimpleName().contains("Unreachable")) {
+                        errorMsg += " - Check if API server is running at " + apiUrl;
+                    }
+                }
                 if (debugMode || attempt == maxRetries - 1) {
                     System.err.println(
-                            "[Worldmap] IO error sending chunk (" + chunkX + "," + chunkZ + "): " + e.getMessage());
+                            "[Worldmap] IO error sending chunk (" + chunkX + "," + chunkZ + ") to " + apiUrl + ": " + errorMsg);
+                    // Show connection warning once
+                    if (!connectionWarningShown && (errorMsg.contains("refused") || 
+                        errorMsg.contains("Unreachable") || 
+                        errorMsg.contains("no message"))) {
+                        System.err.println("[Worldmap] WARNING: Cannot connect to API server. Ensure the web application is running at " + apiUrl);
+                        connectionWarningShown = true;
+                    }
+                    if (debugMode) {
+                        e.printStackTrace();
+                    }
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -129,9 +198,16 @@ public class HttpClientService {
                 }
                 return false;
             } catch (Exception e) {
+                String errorMsg = e.getMessage();
+                if (errorMsg == null || errorMsg.isEmpty()) {
+                    errorMsg = e.getClass().getSimpleName() + " (no message)";
+                }
                 if (debugMode || attempt == maxRetries - 1) {
                     System.err.println("[Worldmap] Unexpected error sending chunk (" + chunkX + "," + chunkZ + "): "
-                            + e.getMessage());
+                            + errorMsg);
+                    if (debugMode) {
+                        e.printStackTrace();
+                    }
                 }
             }
 
@@ -139,12 +215,15 @@ public class HttpClientService {
             if (attempt < maxRetries) {
                 // Exponential backoff: wait 1s, 2s, 4s, etc.
                 long delayMs = (long) Math.pow(2, attempt - 1) * 1000;
+                System.out.println("[Worldmap] Retrying chunk (" + chunkX + "," + chunkZ + ") in " + delayMs + "ms (attempt " + (attempt + 1) + "/" + maxRetries + ")");
                 try {
                     Thread.sleep(delayMs);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     return false;
                 }
+            } else {
+                System.err.println("[Worldmap] Failed to send chunk (" + chunkX + "," + chunkZ + ") after " + maxRetries + " attempts");
             }
         }
 

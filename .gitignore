@@ -56,8 +56,8 @@ desktop.ini
 *.swp
 *~
 
-# Decompiled files
-decompiled/
-
 # Hytale server JAR
 libs/HytaleServer.jar
+
+# Generated files
+decompiled/
