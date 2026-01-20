@@ -139,7 +139,7 @@ public class Main extends JavaPlugin {
 
             // Get all chunk indexes from the chunk loader
             ChunkStore chunkStore = world.getChunkStore();
-            
+
             // Wait for the loader to be initialized (it may not be ready immediately)
             IChunkLoader loader = null;
             int retries = 10;
@@ -177,7 +177,8 @@ public class Main extends JavaPlugin {
                 System.out.println("[Worldmap] Chunk loader not available, using currently loaded chunks");
                 chunkIndexes = chunkStore.getChunkIndexes();
                 if (chunkIndexes.isEmpty()) {
-                    System.err.println("[Worldmap] No chunks are currently loaded. The loader may not be initialized yet.");
+                    System.err.println(
+                            "[Worldmap] No chunks are currently loaded. The loader may not be initialized yet.");
                     return;
                 }
             }
@@ -202,7 +203,7 @@ public class Main extends JavaPlugin {
                 world.getNonTickingChunkAsync(chunkIndex)
                         .thenAccept(chunk -> {
                             if (chunk != null) {
-                                chunkProcessor.processChunk(chunkX, chunkZ, chunk);
+                                chunkProcessor.processChunk(chunkX, chunkZ, chunk, world);
                             } else {
                                 if (config != null && config.isDebugMode()) {
                                     System.out.println(
