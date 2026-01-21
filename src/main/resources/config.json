@@ -1,6 +1,7 @@
 {
   "pluginName": "Worldmap",
   "version": "1.0.0",
+  "worldId": "",
   "requestTimeout": 30000,
   "maxRetries": 3,
   "batchSize": 10,

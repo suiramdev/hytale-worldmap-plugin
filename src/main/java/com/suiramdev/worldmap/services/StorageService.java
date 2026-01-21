@@ -1,7 +1,8 @@
-package com.suiramdev.worldmap.storage;
+package com.suiramdev.worldmap.services;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+
 import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
@@ -10,15 +11,30 @@ import java.util.HashSet;
 import java.util.Set;
 
 /**
- * Manages storage of processed chunks and first-load status
+ * Service for managing storage of processed chunks and first-load status.
+ * 
+ * <p>
+ * This service handles persistence of chunk processing state to disk,
+ * allowing the plugin to track which chunks have already been processed
+ * and avoid duplicate work.
+ * </p>
+ * 
+ * @author suiramdev
+ * @version 1.0.0
  */
 public class StorageService {
+
     private static final String STORAGE_FILE = "worldmap_data.json";
 
     private final File dataFolder;
     private final Gson gson;
     private StorageData data;
 
+    /**
+     * Creates a new StorageService instance.
+     * 
+     * @param dataFolder The plugin's data folder
+     */
     public StorageService(File dataFolder) {
         this.dataFolder = dataFolder;
         this.gson = new GsonBuilder().setPrettyPrinting().create();
@@ -27,7 +43,7 @@ public class StorageService {
     }
 
     /**
-     * Load storage data from file
+     * Loads storage data from file.
      */
     private void loadStorage() {
         File storageFile = new File(dataFolder, STORAGE_FILE);
@@ -55,7 +71,7 @@ public class StorageService {
     }
 
     /**
-     * Save storage data to file
+     * Saves storage data to file.
      */
     public void saveStorage() {
         File storageFile = new File(dataFolder, STORAGE_FILE);
@@ -75,7 +91,11 @@ public class StorageService {
     }
 
     /**
-     * Check if a chunk has been processed
+     * Checks if a chunk has been processed.
+     * 
+     * @param chunkX The chunk X coordinate
+     * @param chunkZ The chunk Z coordinate
+     * @return true if the chunk has been processed, false otherwise
      */
     public boolean isChunkProcessed(int chunkX, int chunkZ) {
         String key = chunkX + "," + chunkZ;
@@ -83,7 +103,10 @@ public class StorageService {
     }
 
     /**
-     * Mark a chunk as processed
+     * Marks a chunk as processed.
+     * 
+     * @param chunkX The chunk X coordinate
+     * @param chunkZ The chunk Z coordinate
      */
     public void markChunkProcessed(int chunkX, int chunkZ) {
         String key = chunkX + "," + chunkZ;
@@ -93,16 +116,48 @@ public class StorageService {
     }
 
     /**
-     * Get count of processed chunks
+     * Gets the count of processed chunks.
+     * 
+     * @return The number of processed chunks
      */
     public int getProcessedChunkCount() {
         return data.processedChunks.size();
     }
 
     /**
-     * Internal class for JSON storage
+     * Checks if block configurations have been sent for a world.
+     * 
+     * @param worldId The world identifier
+     * @return true if block configs have been sent, false otherwise
+     */
+    public boolean areBlockConfigsSent(String worldId) {
+        if (worldId == null || worldId.trim().isEmpty()) {
+            return false;
+        }
+        return data.sentBlockConfigs != null && data.sentBlockConfigs.contains(worldId.trim());
+    }
+
+    /**
+     * Marks block configurations as sent for a world.
+     * 
+     * @param worldId The world identifier
+     */
+    public void markBlockConfigsSent(String worldId) {
+        if (worldId == null || worldId.trim().isEmpty()) {
+            return;
+        }
+        if (data.sentBlockConfigs == null) {
+            data.sentBlockConfigs = new HashSet<>();
+        }
+        data.sentBlockConfigs.add(worldId.trim());
+        saveStorage();
+    }
+
+    /**
+     * Internal class for JSON storage.
      */
     private static class StorageData {
         Set<String> processedChunks = new HashSet<>();
+        Set<String> sentBlockConfigs = new HashSet<>();
     }
 }

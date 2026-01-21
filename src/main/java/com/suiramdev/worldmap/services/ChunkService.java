@@ -1,7 +1,8 @@
 package com.suiramdev.worldmap.services;
 
-import net.jpountz.lz4.LZ4Compressor;
-import net.jpountz.lz4.LZ4Factory;
+import com.suiramdev.worldmap.models.ChunkPayload;
+import com.github.luben.zstd.Zstd;
+
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -12,22 +13,40 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Semaphore;
 
 /**
- * Handles HTTP requests to the external API
+ * Service for handling HTTP requests to send chunk data to the external API.
+ * 
+ * <p>
+ * This service manages the communication with the chunk processing API
+ * endpoint,
+ * including serialization, compression, rate limiting, and retry logic.
+ * </p>
+ * 
+ * @author suiramdev
+ * @version 1.0.0
  */
-public class HttpClientService {
-    private final String apiUrl;
+public class ChunkService {
+
+    private final String apiBaseUrl;
     private final String apiKey;
     private final int requestTimeout;
     private final int maxRetries;
     private final boolean debugMode;
 
     private final HttpClient httpClient;
-    private final LZ4Compressor lz4Compressor;
     private final Semaphore rateLimiter; // Limit concurrent requests (max 5)
     private static boolean connectionWarningShown = false; // Track if we've shown the connection warning
 
-    public HttpClientService(String apiUrl, String apiKey, int requestTimeout, int maxRetries, boolean debugMode) {
-        this.apiUrl = apiUrl;
+    /**
+     * Creates a new ChunkService instance.
+     * 
+     * @param apiBaseUrl     The base API URL
+     * @param apiKey         The API key for authentication
+     * @param requestTimeout Request timeout in milliseconds
+     * @param maxRetries     Maximum number of retry attempts
+     * @param debugMode      Whether debug logging is enabled
+     */
+    public ChunkService(String apiBaseUrl, String apiKey, int requestTimeout, int maxRetries, boolean debugMode) {
+        this.apiBaseUrl = apiBaseUrl != null ? apiBaseUrl.trim() : "";
         this.apiKey = apiKey;
         this.requestTimeout = requestTimeout;
         this.maxRetries = maxRetries;
@@ -37,17 +56,15 @@ public class HttpClientService {
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
 
-        // Initialize LZ4 compressor (fast compression)
-        LZ4Factory factory = LZ4Factory.fastestInstance();
-        this.lz4Compressor = factory.fastCompressor();
         this.rateLimiter = new Semaphore(5); // Max 5 concurrent requests
     }
 
     /**
-     * Send chunk data to the API
+     * Sends chunk data to the API asynchronously.
      * 
      * @param payload ChunkPayload containing compact, binary-friendly chunk data
-     * @return CompletableFuture that completes with true on success, false on failure
+     * @return CompletableFuture that completes with true on success, false on
+     *         failure
      */
     public CompletableFuture<Boolean> sendChunkData(ChunkPayload payload) {
         return CompletableFuture.supplyAsync(() -> {
@@ -56,7 +73,7 @@ public class HttpClientService {
                 rateLimiter.acquire();
 
                 try {
-                    return sendChunkDataWithRetry(payload);
+                    return sendChunkDataToApi(payload);
                 } finally {
                     rateLimiter.release();
                 }
@@ -72,14 +89,18 @@ public class HttpClientService {
     }
 
     /**
-     * Send chunk data with retry logic
+     * Sends chunk data to API endpoint with retry logic.
+     * 
+     * @param payload The chunk payload to send
+     * @return true if successful, false otherwise
      */
-    private boolean sendChunkDataWithRetry(ChunkPayload payload) {
+    private boolean sendChunkDataToApi(ChunkPayload payload) {
         int chunkX = payload.chunkX;
         int chunkZ = payload.chunkZ;
 
-        // Validate API URL
-        if (apiUrl == null || apiUrl.isEmpty()) {
+        // Build the chunk API URL
+        String apiUrl = buildChunkApiUrl();
+        if (apiUrl == null) {
             System.err.println("[Worldmap] API URL is not configured for chunk (" + chunkX + "," + chunkZ + ")");
             return false;
         }
@@ -97,14 +118,11 @@ public class HttpClientService {
             return false;
         }
 
-        // Compress with LZ4
+        // Compress with Zstd
         byte[] compressedData;
         try {
-            int maxCompressedLength = lz4Compressor.maxCompressedLength(serializedData.length);
-            byte[] compressed = new byte[maxCompressedLength];
-            int compressedLength = lz4Compressor.compress(serializedData, 0, serializedData.length, compressed, 0, maxCompressedLength);
-            compressedData = new byte[compressedLength];
-            System.arraycopy(compressed, 0, compressedData, 0, compressedLength);
+            // Use compression level 3 (balanced between speed and compression ratio)
+            compressedData = Zstd.compress(serializedData, 3);
         } catch (Exception e) {
             System.err.println("[Worldmap] Failed to compress chunk payload for (" + chunkX + "," + chunkZ + "): "
                     + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
@@ -131,7 +149,7 @@ public class HttpClientService {
                         .uri(uri)
                         .header("Content-Type", "application/octet-stream")
                         .header("X-Chunk-Format-Version", String.valueOf(ChunkPayload.FORMAT_VERSION))
-                        .header("Content-Encoding", "lz4")
+                        .header("Content-Encoding", "zstd")
                         .POST(HttpRequest.BodyPublishers.ofByteArray(compressedData))
                         .timeout(Duration.ofMillis(requestTimeout));
 
@@ -147,7 +165,7 @@ public class HttpClientService {
                 int compressedSize = compressedData.length;
                 double compressionRatio = (1.0 - (double) compressedSize / rawSize) * 100.0;
                 System.out.println("[Worldmap] Sending chunk (" + chunkX + "," + chunkZ + ") to " + apiUrl
-                        + " (attempt " + (attempt + 1) + "/" + maxRetries 
+                        + " (attempt " + (attempt + 1) + "/" + maxRetries
                         + ", raw: " + rawSize + " bytes, compressed: " + compressedSize + " bytes"
                         + ", ratio: " + String.format("%.1f", compressionRatio) + "%)");
 
@@ -252,5 +270,27 @@ public class HttpClientService {
         }
 
         return false;
+    }
+
+    /**
+     * Builds the API URL for the chunk processing endpoint.
+     * 
+     * <p>
+     * Constructs: {baseUrl}/worker/process-chunk
+     * </p>
+     * 
+     * @return The complete chunk processing API URL, or null if base URL is not
+     *         configured
+     */
+    private String buildChunkApiUrl() {
+        if (apiBaseUrl == null || apiBaseUrl.isEmpty()) {
+            return null;
+        }
+
+        // Remove trailing slash from base URL if present
+        String baseUrl = apiBaseUrl.endsWith("/") ? apiBaseUrl.substring(0, apiBaseUrl.length() - 1) : apiBaseUrl;
+
+        // Build full URL: {baseUrl}/worker/process-chunk
+        return baseUrl + "/worker/process-chunk";
     }
 }

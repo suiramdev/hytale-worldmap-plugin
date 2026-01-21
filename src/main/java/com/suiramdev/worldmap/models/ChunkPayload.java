@@ -1,4 +1,4 @@
-package com.suiramdev.worldmap.services;
+package com.suiramdev.worldmap.models;
 
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
@@ -12,29 +12,32 @@ import java.util.Map;
  * Compact, binary-friendly chunk payload optimized for size, stability, and
  * reusability.
  * 
+ * <p>
  * This payload contains only raw, render-relevant block information using
  * numeric blockstate IDs.
  * No texture information (texture names, UVs, atlas indices, or material
  * references) is included.
  * Texture/material mapping is provided separately via API.
+ * </p>
  * 
+ * <p>
  * Binary Format (before compression):
- * - Version (1 byte): Format version for compatibility
- * - Chunk coordinates (8 bytes: 2x int): chunkX, chunkZ
- * - Timestamp (8 bytes: long): Processing timestamp
- * - Vertical bounds (4 bytes: 2x short): minY, maxY (actual Y range with
- * blocks)
- * - Feature flags (1 byte): Bit flags (light, biome, environment)
- * - Block palette size (varint): Number of unique blockstate IDs
- * - Block palette (N * 4 bytes): Array of int blockstate IDs (palette index ->
- * blockstate ID)
- * - Packed indices length (varint): Size of bit-packed data in bytes
- * - Bits per index (varint): Number of bits used per palette index
- * - Bit-packed indices (variable):
- * - Main chunk indices: 32 * (maxY-minY+1) * 32 indices (palette references)
- * - Halo indices: 34 * (maxY-minY+1) * 34 indices (includes main + 1-block
- * padding on X/Z)
+ * <ul>
+ * <li>Version (1 byte): Format version for compatibility</li>
+ * <li>Chunk coordinates (8 bytes: 2x int): chunkX, chunkZ</li>
+ * <li>Timestamp (8 bytes: long): Processing timestamp</li>
+ * <li>Vertical bounds (4 bytes: 2x short): minY, maxY (actual Y range with
+ * blocks)</li>
+ * <li>Block palette size (varint): Number of unique blockstate IDs</li>
+ * <li>Block palette (N * 4 bytes): Array of int blockstate IDs (palette index
+ * -> blockstate ID)</li>
+ * <li>Packed indices length (varint): Size of bit-packed data in bytes</li>
+ * <li>Bits per index (varint): Number of bits used per palette index</li>
+ * <li>Bit-packed indices (variable): Main chunk indices and halo indices</li>
+ * </ul>
+ * </p>
  * 
+ * <p>
  * The halo padding contains actual neighboring blockstate IDs (not inferred
  * visibility flags)
  * and is clearly separable so the worker can use it for cross-chunk face
@@ -42,25 +45,27 @@ import java.util.Map;
  * excluding it from final mesh output. The worker can fully reconstruct the
  * padded block grid
  * without fetching additional chunks.
+ * </p>
  * 
- * The payload is compressed with LZ4 fast compression after encoding.
+ * <p>
+ * The payload is compressed with Zstd compression after encoding.
  * Format is versioned and stable for future reprocessing.
+ * </p>
+ * 
+ * @author suiramdev
+ * @version 1.0.0
  */
 public class ChunkPayload {
-    // Format version
+
+    /** Format version */
     public static final byte FORMAT_VERSION = 1;
 
-    // Feature flags
-    public static final byte FLAG_LIGHT = 0x01;
-    public static final byte FLAG_BIOME = 0x02;
-    public static final byte FLAG_ENVIRONMENT = 0x04;
-
-    // Chunk dimensions (Hytale: 32x32 blocks, 320 blocks tall)
+    /** Chunk dimensions (32x32 blocks, 320 blocks tall) */
     public static final int CHUNK_SIZE_X = 32;
     public static final int CHUNK_SIZE_Z = 32;
     public static final int CHUNK_SIZE_Y = 320;
 
-    // Halo padding (1 block on each X/Z side)
+    /** Halo padding (1 block on each X/Z side) */
     public static final int HALO_SIZE = 1;
 
     // Main chunk data
@@ -69,7 +74,6 @@ public class ChunkPayload {
     public long timestamp;
     public short minY;
     public short maxY;
-    public byte featureFlags;
 
     // Block palette (blockstate ID -> palette index)
     public int[] blockPalette;
@@ -83,7 +87,11 @@ public class ChunkPayload {
     private int bitsPerIndex;
 
     /**
-     * Create a new chunk payload
+     * Creates a new chunk payload.
+     * 
+     * @param chunkX    The chunk X coordinate
+     * @param chunkZ    The chunk Z coordinate
+     * @param timestamp The processing timestamp
      */
     public ChunkPayload(int chunkX, int chunkZ, long timestamp) {
         this.chunkX = chunkX;
@@ -91,12 +99,11 @@ public class ChunkPayload {
         this.timestamp = timestamp;
         this.minY = 0;
         this.maxY = CHUNK_SIZE_Y - 1;
-        this.featureFlags = 0;
         this.blockPaletteMap = new HashMap<>();
     }
 
     /**
-     * Build the payload from raw block data
+     * Builds the payload from raw block data.
      * 
      * @param mainBlocks Main chunk blocks [32][Y][32] (blockstate IDs)
      * @param haloBlocks Halo padding blocks [34][Y][34] (blockstate IDs, includes
@@ -124,7 +131,7 @@ public class ChunkPayload {
     }
 
     /**
-     * Build the blockstate palette from unique block IDs
+     * Builds the blockstate palette from unique block IDs.
      */
     private void buildPalette(int[][][] mainBlocks, int[][][] haloBlocks, int minY, int maxY) {
         blockPaletteMap.clear();
@@ -164,16 +171,21 @@ public class ChunkPayload {
     }
 
     /**
-     * Pack block indices using bit-packing
+     * Packs block indices using bit-packing.
      * 
+     * <p>
      * Layout:
-     * 1. Main chunk indices: 32 * Y * 32 indices (for mesh generation)
-     * 2. Halo indices: 34 * Y * 34 indices (for cross-chunk face culling, includes
-     * main + padding)
+     * <ol>
+     * <li>Main chunk indices: 32 * Y * 32 indices (for mesh generation)</li>
+     * <li>Halo indices: 34 * Y * 34 indices (for cross-chunk face culling, includes
+     * main + padding)</li>
+     * </ol>
+     * </p>
      * 
+     * <p>
      * The halo is sent separately so the worker can use it for culling while
-     * excluding
-     * the padding from final mesh output.
+     * excluding the padding from final mesh output.
+     * </p>
      */
     private void packIndices(int[][][] mainBlocks, int[][][] haloBlocks, int minY, int maxY) {
         int mainChunkSize = CHUNK_SIZE_X * (maxY - minY + 1) * CHUNK_SIZE_Z;
@@ -225,7 +237,10 @@ public class ChunkPayload {
     }
 
     /**
-     * Serialize to binary format
+     * Serializes the payload to binary format.
+     * 
+     * @return The serialized byte array
+     * @throws IOException If serialization fails
      */
     public byte[] serialize() throws IOException {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -245,9 +260,6 @@ public class ChunkPayload {
         dos.writeShort(minY);
         dos.writeShort(maxY);
 
-        // Feature flags
-        dos.writeByte(featureFlags);
-
         // Block palette
         writeVarInt(dos, blockPalette.length);
         for (int blockId : blockPalette) {
@@ -264,7 +276,7 @@ public class ChunkPayload {
     }
 
     /**
-     * Write a variable-length integer (varint)
+     * Writes a variable-length integer (varint).
      */
     private void writeVarInt(DataOutputStream dos, int value) throws IOException {
         while ((value & ~0x7F) != 0) {
@@ -275,7 +287,7 @@ public class ChunkPayload {
     }
 
     /**
-     * Bit packer for efficient storage of indices
+     * Bit packer for efficient storage of indices.
      */
     private static class BitPacker {
         private final byte[] buffer;

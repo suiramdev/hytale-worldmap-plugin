@@ -8,13 +8,22 @@ import java.io.FileWriter;
 import java.io.IOException;
 
 /**
- * Manages plugin configuration from config.json
+ * Manages plugin configuration from config.json.
+ * 
+ * <p>
+ * This class handles loading and saving of plugin configuration,
+ * providing access to API settings, timeouts, retry counts, and debug mode.
+ * </p>
+ * 
+ * @author suiramdev
+ * @version 1.0.0
  */
 public class PluginConfig {
     private static final String CONFIG_FILE = "config.json";
 
-    private String apiUrl = "http://localhost:3000/api/worker/process-chunk";
+    private String apiUrl = "http://localhost:3000/api";
     private String apiKey = "";
+    private String worldId = "";
     private int requestTimeout = 30000;
     private int maxRetries = 3;
     private int batchSize = 10;
@@ -30,7 +39,11 @@ public class PluginConfig {
     }
 
     /**
-     * Load configuration from config.json file
+     * Loads configuration from config.json file.
+     * 
+     * <p>
+     * If the config file doesn't exist, a default configuration is created.
+     * </p>
      */
     private void loadConfig() {
         File configFile = new File(dataFolder, CONFIG_FILE);
@@ -48,6 +61,8 @@ public class PluginConfig {
                     this.apiUrl = data.apiUrl;
                 if (data.apiKey != null)
                     this.apiKey = data.apiKey;
+                if (data.worldId != null)
+                    this.worldId = data.worldId;
                 if (data.requestTimeout > 0)
                     this.requestTimeout = data.requestTimeout;
                 if (data.maxRetries > 0)
@@ -63,7 +78,7 @@ public class PluginConfig {
     }
 
     /**
-     * Save current configuration to config.json
+     * Saves current configuration to config.json file.
      */
     private void saveConfig() {
         File configFile = new File(dataFolder, CONFIG_FILE);
@@ -77,6 +92,7 @@ public class PluginConfig {
             ConfigData data = new ConfigData();
             data.apiUrl = this.apiUrl;
             data.apiKey = this.apiKey;
+            data.worldId = this.worldId;
             data.requestTimeout = this.requestTimeout;
             data.maxRetries = this.maxRetries;
             data.batchSize = this.batchSize;
@@ -90,26 +106,65 @@ public class PluginConfig {
         }
     }
 
-    public String getApiUrl() {
+    /**
+     * Gets the base API URL.
+     * 
+     * @return The base API URL
+     */
+    public String getApiBaseUrl() {
         return apiUrl;
     }
 
+    /**
+     * Gets the API key for authentication.
+     * 
+     * @return The API key
+     */
     public String getApiKey() {
         return apiKey;
     }
 
+    /**
+     * Gets the world identifier.
+     * 
+     * @return The world identifier, or empty string if not configured
+     */
+    public String getWorldId() {
+        return worldId != null ? worldId.trim() : "";
+    }
+
+    /**
+     * Gets the request timeout in milliseconds.
+     * 
+     * @return The request timeout
+     */
     public int getRequestTimeout() {
         return requestTimeout;
     }
 
+    /**
+     * Gets the maximum number of retry attempts.
+     * 
+     * @return The maximum retry count
+     */
     public int getMaxRetries() {
         return maxRetries;
     }
 
+    /**
+     * Gets the batch size for processing.
+     * 
+     * @return The batch size
+     */
     public int getBatchSize() {
         return batchSize;
     }
 
+    /**
+     * Checks if debug mode is enabled.
+     * 
+     * @return true if debug mode is enabled, false otherwise
+     */
     public boolean isDebugMode() {
         return debugMode;
     }
@@ -120,6 +175,7 @@ public class PluginConfig {
     private static class ConfigData {
         String apiUrl;
         String apiKey;
+        String worldId;
         int requestTimeout;
         int maxRetries;
         int batchSize;
