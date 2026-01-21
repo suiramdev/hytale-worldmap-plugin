@@ -48,10 +48,9 @@ import java.util.Map;
  * </p>
  * 
  * <p>
- * The payload is compressed with Zstd compression after encoding.
- * Format is versioned and stable for future reprocessing.
+ * The format is versioned and stable for future reprocessing.
  * </p>
- * 
+ *
  * @author suiramdev
  * @version 1.0.0
  */

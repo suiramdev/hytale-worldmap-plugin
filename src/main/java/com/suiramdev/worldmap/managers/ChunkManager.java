@@ -74,11 +74,26 @@ public class ChunkManager {
 
         return CompletableFuture.supplyAsync(() -> {
             try {
+                // Get worldId from Main instance
+                Main mainInstance = Main.getInstance();
+                if (mainInstance == null) {
+                    System.err.println("[Worldmap] Main instance not available, cannot get worldId");
+                    failedCount.incrementAndGet();
+                    return false;
+                }
+
+                String worldId = mainInstance.getWorldId();
+                if (worldId == null || worldId.trim().isEmpty()) {
+                    System.err.println("[Worldmap] worldId not available, cannot send chunk");
+                    failedCount.incrementAndGet();
+                    return false;
+                }
+
                 // Extract chunk data with halo padding
                 ChunkPayload payload = extractChunkPayload(chunk, chunkX, chunkZ, world);
 
                 // Send to API
-                ChunkSendResult result = chunkService.sendChunkData(payload).join();
+                ChunkSendResult result = chunkService.sendChunkData(payload, worldId).join();
 
                 // Handle the result
                 if (result.isSuccess()) {
@@ -143,7 +158,7 @@ public class ChunkManager {
                 return false;
             }
 
-            String worldId = mainInstance.getWorldIdPublic();
+            String worldId = mainInstance.getWorldId();
             if (worldId == null || worldId.trim().isEmpty()) {
                 System.err.println("[Worldmap] worldId not available, cannot send asset-map");
                 return false;
@@ -169,7 +184,7 @@ public class ChunkManager {
                     + payload.chunkZ + ")");
 
             // Retry sending the chunk
-            ChunkSendResult retryResult = chunkService.sendChunkData(payload).join();
+            ChunkSendResult retryResult = chunkService.sendChunkData(payload, worldId).join();
             return retryResult.isSuccess();
         } catch (Exception e) {
             System.err.println("[Worldmap] Error sending asset-map and retrying chunk: " + e.getMessage());

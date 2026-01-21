@@ -2,7 +2,6 @@ package com.suiramdev.worldmap.services;
 
 import com.suiramdev.worldmap.models.ChunkPayload;
 import com.suiramdev.worldmap.models.ChunkSendResult;
-import com.github.luben.zstd.Zstd;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
@@ -76,14 +75,14 @@ public class ChunkService {
      * @return CompletableFuture that completes with ChunkSendResult indicating
      *         success, failure, or if asset-map is needed
      */
-    public CompletableFuture<ChunkSendResult> sendChunkData(ChunkPayload payload) {
+    public CompletableFuture<ChunkSendResult> sendChunkData(ChunkPayload payload, String worldId) {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 // Acquire permit for rate limiting
                 rateLimiter.acquire();
 
                 try {
-                    return sendChunkDataToApi(payload);
+                    return sendChunkDataToApi(payload, worldId);
                 } finally {
                     rateLimiter.release();
                 }
@@ -102,14 +101,15 @@ public class ChunkService {
      * Sends chunk data to API endpoint with retry logic.
      * 
      * @param payload The chunk payload to send
-     * @return ChunkSendResult indicating success, failure, or if asset-map is needed
+     * @return ChunkSendResult indicating success, failure, or if asset-map is
+     *         needed
      */
-    private ChunkSendResult sendChunkDataToApi(ChunkPayload payload) {
+    private ChunkSendResult sendChunkDataToApi(ChunkPayload payload, String worldId) {
         int chunkX = payload.chunkX;
         int chunkZ = payload.chunkZ;
 
         // Build the chunk API URL
-        String apiUrl = buildChunkApiUrl();
+        String apiUrl = buildChunkApiUrl(worldId);
         if (apiUrl == null) {
             System.err.println("[Worldmap] API URL is not configured for chunk (" + chunkX + "," + chunkZ + ")");
             return ChunkSendResult.failure();
@@ -121,20 +121,6 @@ public class ChunkService {
             serializedData = payload.serialize();
         } catch (Exception e) {
             System.err.println("[Worldmap] Failed to serialize chunk payload for (" + chunkX + "," + chunkZ + "): "
-                    + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
-            if (debugMode) {
-                e.printStackTrace();
-            }
-            return ChunkSendResult.failure();
-        }
-
-        // Compress with Zstd
-        byte[] compressedData;
-        try {
-            // Use compression level 3 (balanced between speed and compression ratio)
-            compressedData = Zstd.compress(serializedData, 3);
-        } catch (Exception e) {
-            System.err.println("[Worldmap] Failed to compress chunk payload for (" + chunkX + "," + chunkZ + "): "
                     + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
             if (debugMode) {
                 e.printStackTrace();
@@ -159,25 +145,21 @@ public class ChunkService {
                         .uri(uri)
                         .header("Content-Type", "application/octet-stream")
                         .header("X-Chunk-Format-Version", String.valueOf(ChunkPayload.FORMAT_VERSION))
-                        .header("Content-Encoding", "zstd")
-                        .POST(HttpRequest.BodyPublishers.ofByteArray(compressedData))
+                        .POST(HttpRequest.BodyPublishers.ofByteArray(serializedData))
                         .timeout(Duration.ofMillis(requestTimeout));
 
-                // Add Authorization header with API key if provided
+                // Add Authorization header with Bearer token if API key is provided
                 if (apiKey != null && !apiKey.isEmpty()) {
-                    requestBuilder.header("Authorization", apiKey);
+                    requestBuilder.header("Authorization", "Bearer " + apiKey);
                 }
 
                 HttpRequest httpRequest = requestBuilder.build();
 
                 // Log request details
                 int rawSize = serializedData.length;
-                int compressedSize = compressedData.length;
-                double compressionRatio = (1.0 - (double) compressedSize / rawSize) * 100.0;
                 System.out.println("[Worldmap] Sending chunk (" + chunkX + "," + chunkZ + ") to " + apiUrl
                         + " (attempt " + (attempt + 1) + "/" + maxRetries
-                        + ", raw: " + rawSize + " bytes, compressed: " + compressedSize + " bytes"
-                        + ", ratio: " + String.format("%.1f", compressionRatio) + "%)");
+                        + ", size: " + rawSize + " bytes)");
 
                 HttpResponse<String> response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
 
@@ -332,9 +314,9 @@ public class ChunkService {
                             .GET()
                             .timeout(Duration.ofMillis(requestTimeout));
 
-                    // Add Authorization header with API key if provided
+                    // Add Authorization header with Bearer token if API key is provided
                     if (apiKey != null && !apiKey.isEmpty()) {
-                        requestBuilder.header("Authorization", apiKey);
+                        requestBuilder.header("Authorization", "Bearer " + apiKey);
                     }
 
                     HttpRequest httpRequest = requestBuilder.build();
@@ -351,17 +333,23 @@ public class ChunkService {
 
                     if (statusCode >= 200 && statusCode < 300) {
                         Set<String> processedChunks = parseProcessedChunksResponse(responseBody);
-                        System.out.println("[Worldmap] Successfully fetched " + processedChunks.size()
-                                + " processed chunks from API");
+                        if (processedChunks.isEmpty() && (responseBody == null || responseBody.trim().isEmpty())) {
+                            System.out.println("[Worldmap] API returned empty response - no chunks processed yet");
+                        } else {
+                            System.out.println("[Worldmap] Successfully fetched " + processedChunks.size()
+                                    + " processed chunks from API");
+                        }
                         return processedChunks;
                     } else {
                         System.err.println("[Worldmap] API returned error status " + statusCode
-                                + " when fetching processed chunks list");
+                                + " when fetching processed chunks list from " + apiUrl);
                         if (responseBody != null && !responseBody.isEmpty()) {
                             String bodyPreview = responseBody.length() > 500
                                     ? responseBody.substring(0, 500) + "... (truncated)"
                                     : responseBody;
                             System.err.println("[Worldmap] Error response body: " + bodyPreview);
+                        } else {
+                            System.err.println("[Worldmap] Error response body: (empty)");
                         }
                     }
                 } catch (IOException e) {
@@ -440,6 +428,9 @@ public class ChunkService {
             JsonElement jsonElement = gson.fromJson(responseBody, JsonElement.class);
 
             if (jsonElement == null) {
+                if (debugMode) {
+                    System.err.println("[Worldmap] Response body parsed to null");
+                }
                 return processedChunks;
             }
 
@@ -450,6 +441,15 @@ public class ChunkService {
                 JsonObject jsonObject = jsonElement.getAsJsonObject();
                 if (jsonObject.has("chunks") && jsonObject.get("chunks").isJsonArray()) {
                     chunksArray = jsonObject.getAsJsonArray("chunks");
+                } else if (jsonObject.has("data") && jsonObject.get("data").isJsonArray()) {
+                    // Alternative format: {"data": [...]}
+                    chunksArray = jsonObject.getAsJsonArray("data");
+                } else if (jsonObject.size() == 0) {
+                    // Empty object - no chunks processed yet
+                    if (debugMode) {
+                        System.out.println("[Worldmap] Received empty response object - no chunks processed yet");
+                    }
+                    return processedChunks;
                 }
             }
             // Check if it's directly an array
@@ -459,6 +459,16 @@ public class ChunkService {
 
             if (chunksArray == null) {
                 System.err.println("[Worldmap] Unexpected response format for processed chunks list");
+                System.err.println("[Worldmap] Response type: " + (jsonElement != null ? jsonElement.getClass().getSimpleName() : "null"));
+                if (jsonElement != null && jsonElement.isJsonObject()) {
+                    JsonObject jsonObject = jsonElement.getAsJsonObject();
+                    System.err.println("[Worldmap] Response keys: " + jsonObject.keySet());
+                }
+                if (responseBody != null && responseBody.length() < 1000) {
+                    System.err.println("[Worldmap] Response body: " + responseBody);
+                } else if (responseBody != null) {
+                    System.err.println("[Worldmap] Response body (first 500 chars): " + responseBody.substring(0, Math.min(500, responseBody.length())));
+                }
                 return processedChunks;
             }
 
@@ -518,13 +528,14 @@ public class ChunkService {
      * Builds the API URL for the chunk processing endpoint.
      * 
      * <p>
-     * Constructs: {baseUrl}/worker/process-chunk
+     * Constructs: {baseUrl}/api/worlds/:worldId/chunks/process
      * </p>
      * 
+     * @param worldId The world identifier
      * @return The complete chunk processing API URL, or null if base URL is not
      *         configured
      */
-    private String buildChunkApiUrl() {
+    private String buildChunkApiUrl(String worldId) {
         if (apiBaseUrl == null || apiBaseUrl.isEmpty()) {
             return null;
         }
@@ -532,8 +543,8 @@ public class ChunkService {
         // Remove trailing slash from base URL if present
         String baseUrl = apiBaseUrl.endsWith("/") ? apiBaseUrl.substring(0, apiBaseUrl.length() - 1) : apiBaseUrl;
 
-        // Build full URL: {baseUrl}/worker/process-chunk
-        return baseUrl + "/worker/process-chunk";
+        // Build full URL: {baseUrl}/api/worlds/:worldId/chunks/process
+        return baseUrl + "/worlds/" + worldId + "/chunks/process";
     }
 
     /**

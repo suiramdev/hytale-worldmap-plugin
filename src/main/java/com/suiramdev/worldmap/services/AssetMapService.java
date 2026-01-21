@@ -144,9 +144,9 @@ public class AssetMapService {
                         .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
                         .timeout(Duration.ofMillis(requestTimeout));
 
-                // Add Authorization header if API key is provided
+                // Add Authorization header with Bearer token if API key is provided
                 if (apiKey != null && !apiKey.isEmpty()) {
-                    requestBuilder.header("Authorization", apiKey);
+                    requestBuilder.header("Authorization", "Bearer " + apiKey);
                 }
 
                 HttpRequest httpRequest = requestBuilder.build();
@@ -242,7 +242,7 @@ public class AssetMapService {
         String baseUrl = apiBaseUrl.endsWith("/") ? apiBaseUrl.substring(0, apiBaseUrl.length() - 1) : apiBaseUrl;
 
         // Build full URL: {baseUrl}/world/{worldId}/asset-map
-        return baseUrl + "/world/" + worldId + "/asset-map";
+        return baseUrl + "/worlds/" + worldId + "/asset-map";
     }
 
     /**

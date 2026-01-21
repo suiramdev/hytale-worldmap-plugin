@@ -39,6 +39,12 @@ open class RunHytalePlugin : Plugin<Project> {
                 dependsOn(it)
             }
         }
+
+        // Register the stopServer task
+        project.tasks.register("stopServer", StopServerTask::class.java) {
+            group = "hytale"
+            description = "Stops any running Hytale server processes"
+        }
     }
 }
 
@@ -146,49 +152,268 @@ open class RunServerTask : DefaultTask() {
             .directory(runDir)
             .start()
 
-        // Handle graceful shutdown
+        // Get PID and save it to a file for later cleanup
+        val pid = process.pid()
+        val pidFile = File(runDir, ".server.pid")
+        pidFile.writeText(pid.toString())
+        println("Server started with PID: $pid")
+        println("PID saved to: ${pidFile.absolutePath}")
+
+        // Handle graceful shutdown with timeout
         val shutdownHook = Thread {
             if (process.isAlive) {
-                println("\nStopping server...")
+                println("\nStopping server (PID: $pid)...")
+                killProcess(pid)
                 process.destroy()
+                // Force kill after 2 seconds if still alive
+                try {
+                    Thread.sleep(2000)
+                    if (process.isAlive) {
+                        println("Forcefully terminating server...")
+                        killProcessForcibly(pid)
+                        process.destroyForcibly()
+                    }
+                } catch (e: InterruptedException) {
+                    // Interrupted, force kill immediately
+                    if (process.isAlive) {
+                        killProcessForcibly(pid)
+                        process.destroyForcibly()
+                    }
+                }
             }
+            // Clean up PID file
+            pidFile.delete()
         }
         Runtime.getRuntime().addShutdownHook(shutdownHook)
 
         // Forward stdout to console
         Thread {
-            process.inputStream.bufferedReader().useLines { lines ->
-                lines.forEach { println(it) }
+            try {
+                process.inputStream.bufferedReader().useLines { lines ->
+                    lines.forEach { println(it) }
+                }
+            } catch (e: Exception) {
+                // Stream closed
             }
-        }.start()
+        }.apply { isDaemon = true; start() }
 
         // Forward stderr to console
         Thread {
-            process.errorStream.bufferedReader().useLines { lines ->
-                lines.forEach { System.err.println(it) }
+            try {
+                process.errorStream.bufferedReader().useLines { lines ->
+                    lines.forEach { System.err.println(it) }
+                }
+            } catch (e: Exception) {
+                // Stream closed
             }
-        }.start()
+        }.apply { isDaemon = true; start() }
 
         // Forward stdin to server (for commands)
-        Thread {
-            System.`in`.bufferedReader().useLines { lines ->
-                lines.forEach {
-                    process.outputStream.write((it + "\n").toByteArray())
-                    process.outputStream.flush()
+        val stdinThread = Thread {
+            try {
+                System.`in`.bufferedReader().useLines { lines ->
+                    lines.forEach {
+                        if (process.isAlive) {
+                            try {
+                                process.outputStream.write((it + "\n").toByteArray())
+                                process.outputStream.flush()
+                            } catch (e: Exception) {
+                                // Output stream closed
+                                return@useLines
+                            }
+                        }
+                    }
                 }
+            } catch (e: Exception) {
+                // Input stream closed, likely due to shutdown
             }
-        }.start()
+        }.apply { isDaemon = true; start() }
 
         // Wait for server to exit
         val exitCode = process.waitFor()
         
-        // Remove shutdown hook since process exited normally
+        // Remove shutdown hooks since process exited normally
         try {
             Runtime.getRuntime().removeShutdownHook(shutdownHook)
         } catch (e: IllegalStateException) {
             // Shutdown already in progress, ignore
         }
         
+        // Interrupt stdin thread if still running
+        if (stdinThread.isAlive) {
+            stdinThread.interrupt()
+        }
+        
+        // Clean up PID file
+        pidFile.delete()
+        
         println("Server exited with code $exitCode")
+    }
+
+    /**
+     * Kill a process by PID (graceful SIGTERM)
+     */
+    private fun killProcess(pid: Long) {
+        try {
+            val os = System.getProperty("os.name").lowercase()
+            if (os.contains("win")) {
+                // Windows
+                Runtime.getRuntime().exec("taskkill /PID $pid")
+            } else {
+                // Unix-like (macOS, Linux)
+                Runtime.getRuntime().exec("kill $pid")
+            }
+        } catch (e: Exception) {
+            // Ignore errors
+        }
+    }
+
+    /**
+     * Forcefully kill a process by PID (SIGKILL)
+     */
+    private fun killProcessForcibly(pid: Long) {
+        try {
+            val os = System.getProperty("os.name").lowercase()
+            if (os.contains("win")) {
+                // Windows
+                Runtime.getRuntime().exec("taskkill /F /PID $pid")
+            } else {
+                // Unix-like (macOS, Linux)
+                Runtime.getRuntime().exec("kill -9 $pid")
+            }
+        } catch (e: Exception) {
+            // Ignore errors
+        }
+    }
+}
+
+/**
+ * Task to stop any running Hytale server processes.
+ */
+open class StopServerTask : DefaultTask() {
+    @TaskAction
+    fun stop() {
+        val runDir = File(project.projectDir, "run")
+        val pidFile = File(runDir, ".server.pid")
+
+        if (!pidFile.exists()) {
+            println("No PID file found. Searching for running server processes...")
+            // Try to find and kill any Java processes running server.jar
+            killServerProcesses(runDir)
+            return
+        }
+
+        val pid = pidFile.readText().trim().toLongOrNull()
+        if (pid == null) {
+            println("Invalid PID in file: ${pidFile.absolutePath}")
+            pidFile.delete()
+            return
+        }
+
+        println("Stopping server with PID: $pid")
+        
+        // Try graceful shutdown first
+        if (killProcess(pid)) {
+            println("Server stopped successfully")
+            pidFile.delete()
+        } else {
+            // Force kill if graceful didn't work
+            println("Graceful shutdown failed, forcing termination...")
+            if (killProcessForcibly(pid)) {
+                println("Server force-killed")
+                pidFile.delete()
+            } else {
+                println("Failed to kill process. It may have already exited.")
+                pidFile.delete()
+            }
+        }
+    }
+
+    /**
+     * Kill server processes by finding Java processes running server.jar
+     */
+    private fun killServerProcesses(runDir: File) {
+        try {
+            val os = System.getProperty("os.name").lowercase()
+            val serverJar = File(runDir, "server.jar")
+            
+            if (!serverJar.exists()) {
+                println("No server.jar found in run directory")
+                return
+            }
+
+            if (os.contains("win")) {
+                // Windows: Find processes using server.jar
+                val process = Runtime.getRuntime().exec("wmic process where \"commandline like '%server.jar%'\" get processid")
+                val output = process.inputStream.bufferedReader().readText()
+                val pids = output.lines()
+                    .filter { it.trim().matches(Regex("\\d+")) }
+                    .mapNotNull { it.trim().toLongOrNull() }
+                
+                if (pids.isEmpty()) {
+                    println("No running server processes found")
+                } else {
+                    pids.forEach { pid ->
+                        println("Killing process PID: $pid")
+                        killProcessForcibly(pid)
+                    }
+                }
+            } else {
+                // Unix-like: Use pgrep or ps to find processes
+                val process = Runtime.getRuntime().exec("pgrep -f 'server.jar'")
+                val output = process.inputStream.bufferedReader().readText()
+                val pids = output.lines()
+                    .filter { it.trim().isNotEmpty() }
+                    .mapNotNull { it.trim().toLongOrNull() }
+                
+                if (pids.isEmpty()) {
+                    println("No running server processes found")
+                } else {
+                    pids.forEach { pid ->
+                        println("Killing process PID: $pid")
+                        killProcessForcibly(pid)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            println("Error searching for server processes: ${e.message}")
+            println("\nTo manually kill server processes, run:")
+            println("  macOS/Linux: ps aux | grep server.jar")
+            println("  Then: kill <PID> or kill -9 <PID>")
+            println("  Windows: tasklist | findstr java")
+            println("  Then: taskkill /PID <PID> /F")
+        }
+    }
+
+    /**
+     * Kill a process by PID (graceful SIGTERM)
+     */
+    private fun killProcess(pid: Long): Boolean {
+        return try {
+            val os = System.getProperty("os.name").lowercase()
+            if (os.contains("win")) {
+                Runtime.getRuntime().exec("taskkill /PID $pid").waitFor() == 0
+            } else {
+                Runtime.getRuntime().exec("kill $pid").waitFor() == 0
+            }
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Forcefully kill a process by PID (SIGKILL)
+     */
+    private fun killProcessForcibly(pid: Long): Boolean {
+        return try {
+            val os = System.getProperty("os.name").lowercase()
+            if (os.contains("win")) {
+                Runtime.getRuntime().exec("taskkill /F /PID $pid").waitFor() == 0
+            } else {
+                Runtime.getRuntime().exec("kill -9 $pid").waitFor() == 0
+            }
+        } catch (e: Exception) {
+            false
+        }
     }
 }

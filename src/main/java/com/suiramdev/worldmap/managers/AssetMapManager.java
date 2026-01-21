@@ -1,5 +1,6 @@
 package com.suiramdev.worldmap.managers;
 
+import com.hypixel.hytale.assetstore.map.BlockTypeAssetMap;
 import com.hypixel.hytale.protocol.BlockMaterial;
 import com.hypixel.hytale.protocol.ColorLight;
 import com.hypixel.hytale.protocol.DrawType;
@@ -47,30 +48,61 @@ public class AssetMapManager {
         List<AssetMapPayload> assetMap = new ArrayList<>();
 
         try {
-            // Get BlockType asset map using reflection (BlockType.getAssetMap())
-            Map<Integer, BlockType> blockTypeMap = getBlockTypeMap();
+            // Get BlockType asset map (BlockType.getAssetMap() returns BlockTypeAssetMap<String, BlockType>)
+            BlockTypeAssetMap<String, BlockType> blockTypeAssetMap = BlockType.getAssetMap();
+
+            if (blockTypeAssetMap == null) {
+                if (debugMode) {
+                    System.err.println("[Worldmap] BlockType.getAssetMap() returned null - registry may not be initialized yet");
+                }
+                return assetMap;
+            }
+
+            // Get the underlying map to iterate all block types
+            Map<String, BlockType> blockTypeMap = blockTypeAssetMap.getAssetMap();
 
             if (blockTypeMap == null || blockTypeMap.isEmpty()) {
-                System.err.println("[Worldmap] BlockType asset map is empty or unavailable");
+                if (debugMode) {
+                    System.err.println("[Worldmap] BlockType asset map is empty - registry may not be initialized yet");
+                }
                 return assetMap;
             }
 
             System.out.println("[Worldmap] Found " + blockTypeMap.size() + " block types in registry");
 
             // Extract asset map entry for each block type
-            for (Map.Entry<Integer, BlockType> entry : blockTypeMap.entrySet()) {
-                int blockId = entry.getKey();
-                BlockType blockType = entry.getValue();
+            for (BlockType blockType : blockTypeMap.values()) {
+                if (blockType == null) {
+                    continue;
+                }
 
                 try {
+                    // Get the integer block ID using the asset map's getIndex method
+                    String blockTypeId = blockType.getId();
+                    if (blockTypeId == null || blockTypeId.isEmpty()) {
+                        if (debugMode) {
+                            System.err.println("[Worldmap] BlockType has null or empty ID, skipping");
+                        }
+                        continue;
+                    }
+
+                    int blockId = blockTypeAssetMap.getIndex(blockTypeId);
+                    if (blockId == Integer.MIN_VALUE) {
+                        // Integer.MIN_VALUE is the NOT_FOUND constant in BlockTypeAssetMap
+                        if (debugMode) {
+                            System.err.println("[Worldmap] Could not get index for block type: " + blockTypeId);
+                        }
+                        continue;
+                    }
+
                     AssetMapPayload config = extractBlockConfig(blockId, blockType);
                     if (config != null) {
                         assetMap.add(config);
                     }
                 } catch (Exception e) {
                     if (debugMode) {
-                        System.err.println("[Worldmap] Error extracting asset map entry for blockId " + blockId + ": "
-                                + e.getMessage());
+                        System.err.println("[Worldmap] Error extracting asset map entry for block type '" 
+                                + (blockType.getId() != null ? blockType.getId() : "unknown") + "': " + e.getMessage());
                     }
                 }
             }
@@ -88,29 +120,6 @@ public class AssetMapManager {
         return assetMap;
     }
 
-    /**
-     * Gets BlockType asset map.
-     * 
-     * @return Map of block ID to BlockType, or null if unavailable
-     */
-    @SuppressWarnings("unchecked")
-    private Map<Integer, BlockType> getBlockTypeMap() {
-        try {
-            // Get BlockType asset map (getAssetMap() returns BlockTypeAssetMap which
-            // extends Map)
-            Object assetMap = BlockType.getAssetMap();
-
-            if (assetMap instanceof Map) {
-                return (Map<Integer, BlockType>) assetMap;
-            }
-        } catch (Exception e) {
-            if (debugMode) {
-                System.err.println("[Worldmap] Error accessing BlockType.getAssetMap(): " + e.getMessage());
-                e.printStackTrace();
-            }
-        }
-        return null;
-    }
 
     /**
      * Extracts block configuration from a BlockType.

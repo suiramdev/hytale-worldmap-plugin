@@ -17,8 +17,6 @@ import it.unimi.dsi.fastutil.longs.LongSet;
 import javax.annotation.Nonnull;
 import java.io.File;
 import java.io.IOException;
-import java.util.HashSet;
-import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -97,7 +95,7 @@ public class Main extends JavaPlugin {
             sendAssetMapOnStartup();
 
             // Process chunks asynchronously (will use API list)
-            processAllChunksAsync();
+            processAllChunks();
 
         } catch (Exception e) {
             System.err.println("[Worldmap] ERROR: Failed to initialize plugin: " + e.getMessage());
@@ -146,13 +144,18 @@ public class Main extends JavaPlugin {
         // Initialize asset map manager
         assetMapManager = new AssetMapManager(config.isDebugMode());
 
-        // Initialize chunk manager (requires asset map service and manager for coordination)
+        // Initialize chunk manager (requires asset map service and manager for
+        // coordination)
         chunkManager = new ChunkManager(chunkService, assetMapService, assetMapManager, config.isDebugMode());
     }
 
-
     /**
      * Sends asset map to API on plugin startup.
+     * 
+     * <p>
+     * Retries gathering the asset map with delays, as the BlockType registry
+     * may not be fully initialized immediately at plugin startup.
+     * </p>
      */
     private void sendAssetMapOnStartup() {
         CompletableFuture.runAsync(() -> {
@@ -167,11 +170,13 @@ public class Main extends JavaPlugin {
 
                 System.out.println("[Worldmap] Sending asset-map to API for world: " + worldId);
 
-                // Gather asset map
-                var assetMap = assetMapManager.gatherAssetMap();
+                // Gather asset map with retries (BlockType registry may not be ready
+                // immediately)
+                var assetMap = gatherAssetMapWithRetry();
 
-                if (assetMap.isEmpty()) {
-                    System.err.println("[Worldmap] WARNING: No asset map data gathered");
+                if (assetMap == null || assetMap.isEmpty()) {
+                    System.err.println("[Worldmap] WARNING: No asset map data gathered after retries. " +
+                            "BlockType registry may not be available yet. Asset-map will be sent when needed.");
                     return;
                 }
 
@@ -197,6 +202,44 @@ public class Main extends JavaPlugin {
                 e.printStackTrace();
             }
         });
+    }
+
+    /**
+     * Gathers asset map with retry logic, as the BlockType registry may not be
+     * initialized immediately.
+     * 
+     * @return List of asset map entries, or empty list if unavailable after retries
+     */
+    private java.util.List<com.suiramdev.worldmap.models.AssetMapPayload> gatherAssetMapWithRetry() {
+        int maxRetries = 5;
+        long delayMs = 1000; // Start with 1 second delay
+
+        for (int attempt = 0; attempt < maxRetries; attempt++) {
+            var assetMap = assetMapManager.gatherAssetMap();
+
+            if (assetMap != null && !assetMap.isEmpty()) {
+                if (attempt > 0) {
+                    System.out.println("[Worldmap] Successfully gathered asset map on attempt " + (attempt + 1));
+                }
+                return assetMap;
+            }
+
+            if (attempt < maxRetries - 1) {
+                System.out.println("[Worldmap] Asset map not available yet, retrying in " + delayMs + "ms (attempt "
+                        + (attempt + 2) + "/" + maxRetries + ")");
+                try {
+                    Thread.sleep(delayMs);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    System.err.println("[Worldmap] Interrupted while waiting for asset map");
+                    return new java.util.ArrayList<>();
+                }
+                delayMs *= 2; // Exponential backoff
+            }
+        }
+
+        System.err.println("[Worldmap] Failed to gather asset map after " + maxRetries + " attempts");
+        return new java.util.ArrayList<>();
     }
 
     /**
@@ -386,7 +429,7 @@ public class Main extends JavaPlugin {
      * 
      * @return The world identifier, or null if not available
      */
-    private String getWorldId() {
+    public String getWorldId() {
         String worldId = config.getWorldId();
         if (worldId != null && !worldId.isEmpty()) {
             return worldId;
@@ -430,15 +473,4 @@ public class Main extends JavaPlugin {
     public AssetMapService getAssetMapService() {
         return assetMapService;
     }
-
-    /**
-     * Gets the world identifier, with fallback to world name if not configured.
-     * This is a public version of the private getWorldId() method.
-     * 
-     * @return The world identifier, or null if not available
-     */
-    public String getWorldIdPublic() {
-        return getWorldId();
-    }
-
 }

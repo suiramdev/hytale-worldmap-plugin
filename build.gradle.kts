@@ -21,9 +21,6 @@ dependencies {
     implementation("com.google.code.gson:gson:2.10.1")
     implementation("org.jetbrains:annotations:24.1.0")
     
-    // Zstd compression for chunk payload
-    implementation("com.github.luben:zstd-jni:1.5.7-6")
-    
     // Test dependencies
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.0")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
