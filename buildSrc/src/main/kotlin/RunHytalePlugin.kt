@@ -258,10 +258,10 @@ open class RunServerTask : DefaultTask() {
             val os = System.getProperty("os.name").lowercase()
             if (os.contains("win")) {
                 // Windows
-                Runtime.getRuntime().exec("taskkill /PID $pid")
+                ProcessBuilder("taskkill", "/PID", pid.toString()).start()
             } else {
                 // Unix-like (macOS, Linux)
-                Runtime.getRuntime().exec("kill $pid")
+                ProcessBuilder("kill", pid.toString()).start()
             }
         } catch (e: Exception) {
             // Ignore errors
@@ -276,10 +276,10 @@ open class RunServerTask : DefaultTask() {
             val os = System.getProperty("os.name").lowercase()
             if (os.contains("win")) {
                 // Windows
-                Runtime.getRuntime().exec("taskkill /F /PID $pid")
+                ProcessBuilder("taskkill", "/F", "/PID", pid.toString()).start()
             } else {
                 // Unix-like (macOS, Linux)
-                Runtime.getRuntime().exec("kill -9 $pid")
+                ProcessBuilder("kill", "-9", pid.toString()).start()
             }
         } catch (e: Exception) {
             // Ignore errors
@@ -344,7 +344,7 @@ open class StopServerTask : DefaultTask() {
 
             if (os.contains("win")) {
                 // Windows: Find processes using server.jar
-                val process = Runtime.getRuntime().exec("wmic process where \"commandline like '%server.jar%'\" get processid")
+                val process = ProcessBuilder("wmic", "process", "where", "commandline like '%server.jar%'", "get", "processid").start()
                 val output = process.inputStream.bufferedReader().readText()
                 val pids = output.lines()
                     .filter { it.trim().matches(Regex("\\d+")) }
@@ -360,7 +360,7 @@ open class StopServerTask : DefaultTask() {
                 }
             } else {
                 // Unix-like: Use pgrep or ps to find processes
-                val process = Runtime.getRuntime().exec("pgrep -f 'server.jar'")
+                val process = ProcessBuilder("pgrep", "-f", "server.jar").start()
                 val output = process.inputStream.bufferedReader().readText()
                 val pids = output.lines()
                     .filter { it.trim().isNotEmpty() }
@@ -392,9 +392,9 @@ open class StopServerTask : DefaultTask() {
         return try {
             val os = System.getProperty("os.name").lowercase()
             if (os.contains("win")) {
-                Runtime.getRuntime().exec("taskkill /PID $pid").waitFor() == 0
+                ProcessBuilder("taskkill", "/PID", pid.toString()).start().waitFor() == 0
             } else {
-                Runtime.getRuntime().exec("kill $pid").waitFor() == 0
+                ProcessBuilder("kill", pid.toString()).start().waitFor() == 0
             }
         } catch (e: Exception) {
             false
@@ -408,9 +408,9 @@ open class StopServerTask : DefaultTask() {
         return try {
             val os = System.getProperty("os.name").lowercase()
             if (os.contains("win")) {
-                Runtime.getRuntime().exec("taskkill /F /PID $pid").waitFor() == 0
+                ProcessBuilder("taskkill", "/F", "/PID", pid.toString()).start().waitFor() == 0
             } else {
-                Runtime.getRuntime().exec("kill -9 $pid").waitFor() == 0
+                ProcessBuilder("kill", "-9", pid.toString()).start().waitFor() == 0
             }
         } catch (e: Exception) {
             false
