@@ -4,7 +4,6 @@ import com.hypixel.hytale.server.core.universe.world.World;
 import com.hypixel.hytale.server.core.universe.world.chunk.WorldChunk;
 import com.suiramdev.worldmap.models.ChunkPayload;
 import com.suiramdev.worldmap.services.ChunkService;
-import com.suiramdev.worldmap.services.StorageService;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -26,7 +25,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class ChunkManager {
 
     private final ChunkService chunkService;
-    private final StorageService storageService;
     private final boolean debugMode;
     private final ExecutorService executorService;
     private final AtomicInteger processedCount = new AtomicInteger(0);
@@ -35,13 +33,11 @@ public class ChunkManager {
     /**
      * Creates a new ChunkManager instance.
      * 
-     * @param chunkService   The chunk service for API communication
-     * @param storageService The storage service for tracking processed chunks
-     * @param debugMode      Whether debug logging is enabled
+     * @param chunkService The chunk service for API communication
+     * @param debugMode    Whether debug logging is enabled
      */
-    public ChunkManager(ChunkService chunkService, StorageService storageService, boolean debugMode) {
+    public ChunkManager(ChunkService chunkService, boolean debugMode) {
         this.chunkService = chunkService;
-        this.storageService = storageService;
         this.debugMode = debugMode;
         this.executorService = Executors.newFixedThreadPool(10);
     }

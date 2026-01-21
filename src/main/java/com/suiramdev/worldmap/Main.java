@@ -12,7 +12,6 @@ import com.suiramdev.worldmap.managers.AssetMapManager;
 import com.suiramdev.worldmap.managers.ChunkManager;
 import com.suiramdev.worldmap.services.AssetMapService;
 import com.suiramdev.worldmap.services.ChunkService;
-import com.suiramdev.worldmap.services.StorageService;
 import it.unimi.dsi.fastutil.longs.LongSet;
 
 import javax.annotation.Nonnull;
@@ -41,7 +40,6 @@ public class Main extends JavaPlugin {
 
     // Configuration and services
     private PluginConfig config;
-    private StorageService storageService;
     private ChunkService chunkService;
     private AssetMapService assetMapService;
 
@@ -133,11 +131,6 @@ public class Main extends JavaPlugin {
             chunkManager.shutdown();
         }
 
-        // Save storage
-        if (storageService != null) {
-            storageService.saveStorage();
-        }
-
         System.out.println("[Worldmap] Plugin disabled successfully!");
     }
 
@@ -145,9 +138,6 @@ public class Main extends JavaPlugin {
      * Initializes all service instances.
      */
     private void initializeServices() {
-        // Initialize storage service
-        storageService = new StorageService(dataFolder);
-
         // Initialize chunk service
         chunkService = new ChunkService(
                 config.getApiBaseUrl(),
@@ -170,7 +160,7 @@ public class Main extends JavaPlugin {
      */
     private void initializeManagers() {
         // Initialize chunk manager
-        chunkManager = new ChunkManager(chunkService, storageService, config.isDebugMode());
+        chunkManager = new ChunkManager(chunkService, config.isDebugMode());
 
         // Initialize asset map manager
         assetMapManager = new AssetMapManager(config.isDebugMode());
@@ -441,15 +431,6 @@ public class Main extends JavaPlugin {
         }
 
         return null;
-    }
-
-    /**
-     * Gets the storage service.
-     * 
-     * @return The storage service
-     */
-    public StorageService getStorageService() {
-        return storageService;
     }
 
     /**
