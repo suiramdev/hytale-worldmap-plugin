@@ -34,6 +34,7 @@ import java.util.Map;
  * <li>Packed indices length (varint): Size of bit-packed data in bytes</li>
  * <li>Bits per index (varint): Number of bits used per palette index</li>
  * <li>Bit-packed indices (variable): Main chunk indices and halo indices</li>
+ * <li>Tint map (4096 bytes: 32x32 int array): Tint values per X/Z position</li>
  * </ul>
  * </p>
  * 
@@ -85,6 +86,9 @@ public class ChunkPayload {
     private byte[] packedIndices;
     private int bitsPerIndex;
 
+    // Tint map (32x32 array of tint values, one per X/Z position)
+    private int[][] tintMap;
+
     /**
      * Creates a new chunk payload.
      * 
@@ -109,10 +113,14 @@ public class ChunkPayload {
      *                   main + padding)
      * @param minY       Minimum Y coordinate with blocks
      * @param maxY       Maximum Y coordinate with blocks
+     * @param tintMap    Tint map [32][32] (tint values per X/Z position)
      */
-    public void buildFromBlocks(int[][][] mainBlocks, int[][][] haloBlocks, int minY, int maxY) {
+    public void buildFromBlocks(int[][][] mainBlocks, int[][][] haloBlocks, int minY, int maxY, int[][] tintMap) {
         this.minY = (short) minY;
         this.maxY = (short) maxY;
+
+        // Store tint map
+        this.tintMap = tintMap != null ? tintMap : new int[CHUNK_SIZE_X][CHUNK_SIZE_Z];
 
         // Build palette from all unique blockstate IDs
         buildPalette(mainBlocks, haloBlocks, minY, maxY);
@@ -269,6 +277,22 @@ public class ChunkPayload {
         writeVarInt(dos, packedIndices.length);
         writeVarInt(dos, bitsPerIndex);
         dos.write(packedIndices);
+
+        // Tint map (32x32 array of int values)
+        if (tintMap != null) {
+            for (int x = 0; x < CHUNK_SIZE_X; x++) {
+                for (int z = 0; z < CHUNK_SIZE_Z; z++) {
+                    dos.writeInt(tintMap[x][z]);
+                }
+            }
+        } else {
+            // Write default tint values (0) if tint map is not set
+            for (int x = 0; x < CHUNK_SIZE_X; x++) {
+                for (int z = 0; z < CHUNK_SIZE_Z; z++) {
+                    dos.writeInt(0);
+                }
+            }
+        }
 
         dos.flush();
         return baos.toByteArray();

@@ -261,8 +261,24 @@ public class ChunkManager {
             // Fill halo padding from neighboring chunks
             fillHaloPadding(haloBlocks, chunkX, chunkZ, world, minY, maxY);
 
-            // Build payload from blocks
-            payload.buildFromBlocks(mainBlocks, haloBlocks, minY, maxY);
+            // Extract tint map (32x32 array, one tint value per X/Z position)
+            int[][] tintMap = new int[ChunkPayload.CHUNK_SIZE_X][ChunkPayload.CHUNK_SIZE_Z];
+            for (int x = 0; x < ChunkPayload.CHUNK_SIZE_X; x++) {
+                for (int z = 0; z < ChunkPayload.CHUNK_SIZE_Z; z++) {
+                    try {
+                        tintMap[x][z] = worldChunk.getTint(x, z);
+                    } catch (Exception e) {
+                        // On error, use default tint (0)
+                        if (debugMode) {
+                            System.err.println("[Worldmap] Error getting tint at (" + x + "," + z + "): " + e.getMessage());
+                        }
+                        tintMap[x][z] = 0;
+                    }
+                }
+            }
+
+            // Build payload from blocks and tint map
+            payload.buildFromBlocks(mainBlocks, haloBlocks, minY, maxY, tintMap);
 
         } catch (Exception e) {
             System.err.println(
@@ -275,7 +291,8 @@ public class ChunkManager {
             int haloSizeX = ChunkPayload.CHUNK_SIZE_X + 2 * ChunkPayload.HALO_SIZE;
             int haloSizeZ = ChunkPayload.CHUNK_SIZE_Z + 2 * ChunkPayload.HALO_SIZE;
             int[][][] emptyHalo = new int[haloSizeX][ChunkPayload.CHUNK_SIZE_Y][haloSizeZ];
-            payload.buildFromBlocks(emptyMain, emptyHalo, 0, ChunkPayload.CHUNK_SIZE_Y - 1);
+            int[][] emptyTintMap = new int[ChunkPayload.CHUNK_SIZE_X][ChunkPayload.CHUNK_SIZE_Z];
+            payload.buildFromBlocks(emptyMain, emptyHalo, 0, ChunkPayload.CHUNK_SIZE_Y - 1, emptyTintMap);
         }
 
         return payload;
