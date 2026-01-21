@@ -49,9 +49,6 @@ public class Main extends JavaPlugin {
 
     // Plugin data
     private File dataFolder;
-    
-    // Processed chunks from API (set on startup)
-    private Set<String> processedChunksFromApi = new HashSet<>();
 
     /**
      * Constructor - Called when plugin is loaded.
@@ -90,20 +87,7 @@ public class Main extends JavaPlugin {
             String worldId = getWorldId();
             if (worldId != null && !worldId.isEmpty()) {
                 System.out.println("[Worldmap] Fetching processed chunks list from API...");
-                try {
-                    Set<String> chunks = chunkService.fetchProcessedChunksList(worldId).join();
-                    synchronized (this) {
-                        processedChunksFromApi = chunks;
-                    }
-                    System.out.println("[Worldmap] Loaded " + chunks.size()
-                            + " processed chunks from API. Missing chunks will be sent.");
-                } catch (Exception e) {
-                    System.err.println("[Worldmap] Failed to fetch processed chunks list: " + e.getMessage());
-                    if (config.isDebugMode()) {
-                        e.printStackTrace();
-                    }
-                    System.out.println("[Worldmap] Will process all chunks (API fetch failed)");
-                }
+                chunkManager.fetchProcessedChunksList(worldId).join();
             } else {
                 System.err.println(
                         "[Worldmap] WARNING: worldId not configured, cannot fetch processed chunks list");
@@ -159,11 +143,11 @@ public class Main extends JavaPlugin {
      * Initializes all manager instances.
      */
     private void initializeManagers() {
-        // Initialize chunk manager
-        chunkManager = new ChunkManager(chunkService, config.isDebugMode());
-
         // Initialize asset map manager
         assetMapManager = new AssetMapManager(config.isDebugMode());
+
+        // Initialize chunk manager (requires asset map service and manager for coordination)
+        chunkManager = new ChunkManager(chunkService, assetMapService, assetMapManager, config.isDebugMode());
     }
 
 
@@ -316,13 +300,9 @@ public class Main extends JavaPlugin {
                 int chunkZ = ChunkUtil.zOfChunkIndex(chunkIndex);
 
                 // Check if chunk has already been processed (using API list)
-                // Use synchronized access since the list may still be loading
-                String chunkKey = chunkX + "," + chunkZ;
-                synchronized (this) {
-                    if (processedChunksFromApi.contains(chunkKey)) {
-                        skipped++;
-                        continue;
-                    }
+                if (chunkManager.isChunkProcessed(chunkX, chunkZ)) {
+                    skipped++;
+                    continue;
                 }
 
                 // Get chunk asynchronously (non-ticking to avoid affecting gameplay)
@@ -449,6 +429,16 @@ public class Main extends JavaPlugin {
      */
     public AssetMapService getAssetMapService() {
         return assetMapService;
+    }
+
+    /**
+     * Gets the world identifier, with fallback to world name if not configured.
+     * This is a public version of the private getWorldId() method.
+     * 
+     * @return The world identifier, or null if not available
+     */
+    public String getWorldIdPublic() {
+        return getWorldId();
     }
 
 }

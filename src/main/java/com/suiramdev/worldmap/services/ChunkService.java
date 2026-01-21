@@ -1,6 +1,7 @@
 package com.suiramdev.worldmap.services;
 
 import com.suiramdev.worldmap.models.ChunkPayload;
+import com.suiramdev.worldmap.models.ChunkSendResult;
 import com.github.luben.zstd.Zstd;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -72,10 +73,10 @@ public class ChunkService {
      * Sends chunk data to the API asynchronously.
      * 
      * @param payload ChunkPayload containing compact, binary-friendly chunk data
-     * @return CompletableFuture that completes with true on success, false on
-     *         failure
+     * @return CompletableFuture that completes with ChunkSendResult indicating
+     *         success, failure, or if asset-map is needed
      */
-    public CompletableFuture<Boolean> sendChunkData(ChunkPayload payload) {
+    public CompletableFuture<ChunkSendResult> sendChunkData(ChunkPayload payload) {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 // Acquire permit for rate limiting
@@ -92,7 +93,7 @@ public class ChunkService {
                     System.err.println(
                             "[Worldmap] Request interrupted for chunk (" + payload.chunkX + "," + payload.chunkZ + ")");
                 }
-                return false;
+                return ChunkSendResult.failure();
             }
         });
     }
@@ -101,9 +102,9 @@ public class ChunkService {
      * Sends chunk data to API endpoint with retry logic.
      * 
      * @param payload The chunk payload to send
-     * @return true if successful, false otherwise
+     * @return ChunkSendResult indicating success, failure, or if asset-map is needed
      */
-    private boolean sendChunkDataToApi(ChunkPayload payload) {
+    private ChunkSendResult sendChunkDataToApi(ChunkPayload payload) {
         int chunkX = payload.chunkX;
         int chunkZ = payload.chunkZ;
 
@@ -111,7 +112,7 @@ public class ChunkService {
         String apiUrl = buildChunkApiUrl();
         if (apiUrl == null) {
             System.err.println("[Worldmap] API URL is not configured for chunk (" + chunkX + "," + chunkZ + ")");
-            return false;
+            return ChunkSendResult.failure();
         }
 
         // Serialize to binary format
@@ -124,7 +125,7 @@ public class ChunkService {
             if (debugMode) {
                 e.printStackTrace();
             }
-            return false;
+            return ChunkSendResult.failure();
         }
 
         // Compress with Zstd
@@ -138,7 +139,7 @@ public class ChunkService {
             if (debugMode) {
                 e.printStackTrace();
             }
-            return false;
+            return ChunkSendResult.failure();
         }
 
         int attempt = 0;
@@ -151,7 +152,7 @@ public class ChunkService {
                 } catch (IllegalArgumentException e) {
                     System.err.println(
                             "[Worldmap] Invalid API URL: " + apiUrl + " for chunk (" + chunkX + "," + chunkZ + ")");
-                    return false;
+                    return ChunkSendResult.failure();
                 }
 
                 HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
@@ -205,7 +206,22 @@ public class ChunkService {
                 if (statusCode >= 200 && statusCode < 300) {
                     System.out.println("[Worldmap] Successfully sent chunk (" + chunkX + "," + chunkZ
                             + ") - Status: " + statusCode);
-                    return true;
+                    return ChunkSendResult.success();
+                } else if (statusCode == 428) {
+                    // Check if this is ASSET_MAP_MISSING error
+                    if (isAssetMapMissingError(responseBody)) {
+                        System.out.println("[Worldmap] Received 428 ASSET_MAP_MISSING for chunk (" + chunkX + ","
+                                + chunkZ + "). Asset-map is required.");
+                        // Return result indicating asset-map is needed
+                        // The manager will handle sending the asset-map and retrying
+                        return ChunkSendResult.needsAssetMap();
+                    } else {
+                        System.err.println("[Worldmap] API returned 428 status (not ASSET_MAP_MISSING) for chunk ("
+                                + chunkX + "," + chunkZ + ")");
+                        if (responseBody != null && !responseBody.isEmpty()) {
+                            System.err.println("[Worldmap] Error response body: " + responseBody);
+                        }
+                    }
                 } else {
                     System.err.println("[Worldmap] API returned error status " + statusCode + " for chunk ("
                             + chunkX + "," + chunkZ + ")");
@@ -245,7 +261,7 @@ public class ChunkService {
                 if (debugMode) {
                     System.err.println("[Worldmap] Request interrupted for chunk (" + chunkX + "," + chunkZ + ")");
                 }
-                return false;
+                return ChunkSendResult.failure();
             } catch (Exception e) {
                 String errorMsg = e.getMessage();
                 if (errorMsg == null || errorMsg.isEmpty()) {
@@ -270,7 +286,7 @@ public class ChunkService {
                     Thread.sleep(delayMs);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    return false;
+                    return ChunkSendResult.failure();
                 }
             } else {
                 System.err.println("[Worldmap] Failed to send chunk (" + chunkX + "," + chunkZ + ") after " + maxRetries
@@ -278,7 +294,7 @@ public class ChunkService {
             }
         }
 
-        return false;
+        return ChunkSendResult.failure();
     }
 
     /**
@@ -518,5 +534,42 @@ public class ChunkService {
 
         // Build full URL: {baseUrl}/worker/process-chunk
         return baseUrl + "/worker/process-chunk";
+    }
+
+    /**
+     * Checks if the response body indicates an ASSET_MAP_MISSING error.
+     * 
+     * @param responseBody The response body from the API
+     * @return true if the error code is ASSET_MAP_MISSING, false otherwise
+     */
+    private boolean isAssetMapMissingError(String responseBody) {
+        if (responseBody == null || responseBody.trim().isEmpty()) {
+            return false;
+        }
+
+        try {
+            JsonElement jsonElement = gson.fromJson(responseBody, JsonElement.class);
+            if (jsonElement != null && jsonElement.isJsonObject()) {
+                JsonObject jsonObject = jsonElement.getAsJsonObject();
+                // Check for "code" field with value "ASSET_MAP_MISSING"
+                if (jsonObject.has("code")) {
+                    String code = jsonObject.get("code").getAsString();
+                    return "ASSET_MAP_MISSING".equals(code);
+                }
+                // Also check for "error" field that might contain the code
+                if (jsonObject.has("error")) {
+                    String error = jsonObject.get("error").getAsString();
+                    return "ASSET_MAP_MISSING".equals(error);
+                }
+            }
+        } catch (Exception e) {
+            if (debugMode) {
+                System.err.println("[Worldmap] Error parsing response body for ASSET_MAP_MISSING check: "
+                        + e.getMessage());
+            }
+        }
+
+        // Fallback: check if response body contains the string "ASSET_MAP_MISSING"
+        return responseBody.contains("ASSET_MAP_MISSING");
     }
 }

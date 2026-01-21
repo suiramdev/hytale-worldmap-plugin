@@ -2,9 +2,14 @@ package com.suiramdev.worldmap.managers;
 
 import com.hypixel.hytale.server.core.universe.world.World;
 import com.hypixel.hytale.server.core.universe.world.chunk.WorldChunk;
+import com.suiramdev.worldmap.Main;
 import com.suiramdev.worldmap.models.ChunkPayload;
+import com.suiramdev.worldmap.models.ChunkSendResult;
+import com.suiramdev.worldmap.services.AssetMapService;
 import com.suiramdev.worldmap.services.ChunkService;
 
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -25,19 +30,29 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class ChunkManager {
 
     private final ChunkService chunkService;
+    private final AssetMapService assetMapService;
+    private final AssetMapManager assetMapManager;
     private final boolean debugMode;
     private final ExecutorService executorService;
     private final AtomicInteger processedCount = new AtomicInteger(0);
     private final AtomicInteger failedCount = new AtomicInteger(0);
 
+    // Processed chunks from API (set on initialization)
+    private Set<String> processedChunksFromApi = new HashSet<>();
+
     /**
      * Creates a new ChunkManager instance.
      * 
-     * @param chunkService The chunk service for API communication
-     * @param debugMode    Whether debug logging is enabled
+     * @param chunkService    The chunk service for API communication
+     * @param assetMapService The asset map service for sending asset maps
+     * @param assetMapManager The asset map manager for gathering asset maps
+     * @param debugMode       Whether debug logging is enabled
      */
-    public ChunkManager(ChunkService chunkService, boolean debugMode) {
+    public ChunkManager(ChunkService chunkService, AssetMapService assetMapService,
+            AssetMapManager assetMapManager, boolean debugMode) {
         this.chunkService = chunkService;
+        this.assetMapService = assetMapService;
+        this.assetMapManager = assetMapManager;
         this.debugMode = debugMode;
         this.executorService = Executors.newFixedThreadPool(10);
     }
@@ -54,7 +69,8 @@ public class ChunkManager {
      */
     public CompletableFuture<Boolean> processChunk(int chunkX, int chunkZ, Object chunk, World world) {
         // Note: Chunk processing status is now tracked via API, not local storage
-        // The check for already-processed chunks is done in Main.java using the API list
+        // The check for already-processed chunks is done in Main.java using the API
+        // list
 
         return CompletableFuture.supplyAsync(() -> {
             try {
@@ -62,25 +78,44 @@ public class ChunkManager {
                 ChunkPayload payload = extractChunkPayload(chunk, chunkX, chunkZ, world);
 
                 // Send to API
-                return chunkService.sendChunkData(payload)
-                        .thenApply(success -> {
-                            if (success) {
-                                // Don't mark as processed in local storage - API tracks this
-                                int count = processedCount.incrementAndGet();
+                ChunkSendResult result = chunkService.sendChunkData(payload).join();
 
-                                // Log progress every 100 chunks
-                                if (count % 100 == 0) {
-                                    System.out.println("[Worldmap] Processed " + count + " chunks (failed: "
-                                            + failedCount.get() + ")");
-                                }
+                // Handle the result
+                if (result.isSuccess()) {
+                    // Don't mark as processed in local storage - API tracks this
+                    int count = processedCount.incrementAndGet();
 
-                                return true;
-                            } else {
-                                failedCount.incrementAndGet();
-                                return false;
-                            }
-                        })
-                        .join();
+                    // Log progress every 100 chunks
+                    if (count % 100 == 0) {
+                        System.out.println("[Worldmap] Processed " + count + " chunks (failed: "
+                                + failedCount.get() + ")");
+                    }
+
+                    return true;
+                } else if (result.isAssetMapNeeded()) {
+                    // Asset-map is needed - send it and retry
+                    System.out.println("[Worldmap] Asset-map required for chunk (" + chunkX + "," + chunkZ
+                            + "). Sending asset-map and retrying...");
+
+                    if (sendAssetMapAndRetry(payload)) {
+                        int count = processedCount.incrementAndGet();
+
+                        // Log progress every 100 chunks
+                        if (count % 100 == 0) {
+                            System.out.println("[Worldmap] Processed " + count + " chunks (failed: "
+                                    + failedCount.get() + ")");
+                        }
+
+                        return true;
+                    } else {
+                        failedCount.incrementAndGet();
+                        return false;
+                    }
+                } else {
+                    // Regular failure
+                    failedCount.incrementAndGet();
+                    return false;
+                }
             } catch (Exception e) {
                 System.err.println(
                         "[Worldmap] Error processing chunk (" + chunkX + "," + chunkZ + "): " + e.getMessage());
@@ -91,6 +126,58 @@ public class ChunkManager {
                 return false;
             }
         }, executorService);
+    }
+
+    /**
+     * Sends the asset-map and retries sending the chunk.
+     * 
+     * @param payload The chunk payload to retry after sending asset-map
+     * @return true if the retry was successful, false otherwise
+     */
+    private boolean sendAssetMapAndRetry(ChunkPayload payload) {
+        try {
+            // Get worldId from Main instance
+            Main mainInstance = Main.getInstance();
+            if (mainInstance == null) {
+                System.err.println("[Worldmap] Main instance not available, cannot get worldId");
+                return false;
+            }
+
+            String worldId = mainInstance.getWorldIdPublic();
+            if (worldId == null || worldId.trim().isEmpty()) {
+                System.err.println("[Worldmap] worldId not available, cannot send asset-map");
+                return false;
+            }
+
+            // Gather asset map
+            var assetMap = assetMapManager.gatherAssetMap();
+            if (assetMap == null || assetMap.isEmpty()) {
+                System.err.println("[Worldmap] No asset map data gathered");
+                return false;
+            }
+
+            System.out.println("[Worldmap] Sending asset-map (" + assetMap.size() + " entries) for world: " + worldId);
+
+            // Send asset-map
+            boolean assetMapSent = assetMapService.sendAssetMap(worldId, assetMap).join();
+            if (!assetMapSent) {
+                System.err.println("[Worldmap] Failed to send asset-map");
+                return false;
+            }
+
+            System.out.println("[Worldmap] Asset-map sent successfully, retrying chunk (" + payload.chunkX + ","
+                    + payload.chunkZ + ")");
+
+            // Retry sending the chunk
+            ChunkSendResult retryResult = chunkService.sendChunkData(payload).join();
+            return retryResult.isSuccess();
+        } catch (Exception e) {
+            System.err.println("[Worldmap] Error sending asset-map and retrying chunk: " + e.getMessage());
+            if (debugMode) {
+                e.printStackTrace();
+            }
+            return false;
+        }
     }
 
     /**
@@ -273,6 +360,55 @@ public class ChunkManager {
      */
     public int getFailedCount() {
         return failedCount.get();
+    }
+
+    /**
+     * Fetches the list of processed chunks from the API.
+     * 
+     * <p>
+     * This should be called before processing chunks to avoid sending chunks
+     * that have already been processed.
+     * </p>
+     * 
+     * @param worldId The world identifier
+     * @return CompletableFuture that completes when the fetch is done
+     */
+    public CompletableFuture<Void> fetchProcessedChunksList(String worldId) {
+        if (worldId == null || worldId.trim().isEmpty()) {
+            System.err.println("[Worldmap] WARNING: worldId not configured, cannot fetch processed chunks list");
+            return CompletableFuture.completedFuture(null);
+        }
+
+        return chunkService.fetchProcessedChunksList(worldId)
+                .thenAccept(chunks -> {
+                    synchronized (this) {
+                        processedChunksFromApi = chunks;
+                    }
+                    System.out.println("[Worldmap] Loaded " + chunks.size()
+                            + " processed chunks from API. Missing chunks will be sent.");
+                })
+                .exceptionally(throwable -> {
+                    System.err.println("[Worldmap] Failed to fetch processed chunks list: " + throwable.getMessage());
+                    if (debugMode) {
+                        throwable.printStackTrace();
+                    }
+                    System.out.println("[Worldmap] Will process all chunks (API fetch failed)");
+                    return null;
+                });
+    }
+
+    /**
+     * Checks if a chunk has already been processed.
+     * 
+     * @param chunkX Chunk X coordinate
+     * @param chunkZ Chunk Z coordinate
+     * @return true if the chunk has been processed, false otherwise
+     */
+    public boolean isChunkProcessed(int chunkX, int chunkZ) {
+        String chunkKey = chunkX + "," + chunkZ;
+        synchronized (this) {
+            return processedChunksFromApi.contains(chunkKey);
+        }
     }
 
     /**
