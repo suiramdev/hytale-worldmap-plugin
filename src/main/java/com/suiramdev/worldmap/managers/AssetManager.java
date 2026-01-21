@@ -26,16 +26,16 @@ import java.util.Map;
  * @author suiramdev
  * @version 1.0.0
  */
-public class AssetMapManager {
+public class AssetManager {
 
     private final boolean debugMode;
 
     /**
-     * Creates a new AssetMapManager instance.
+     * Creates a new AssetManager instance.
      * 
      * @param debugMode Whether debug logging is enabled
      */
-    public AssetMapManager(boolean debugMode) {
+    public AssetManager(boolean debugMode) {
         this.debugMode = debugMode;
     }
 

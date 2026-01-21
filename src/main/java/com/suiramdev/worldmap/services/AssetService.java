@@ -17,18 +17,17 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * Service for handling HTTP requests to send asset map data to the external
- * API.
- * 
+ * Service for handling HTTP requests to send asset data to the external API.
+ *
  * <p>
  * This service manages communication with the asset map API endpoint,
  * sending block configuration data for world rendering.
  * </p>
- * 
+ *
  * @author suiramdev
  * @version 1.0.0
  */
-public class AssetMapService {
+public class AssetService {
 
     private final String apiBaseUrl;
     private final String apiKey;
@@ -40,15 +39,15 @@ public class AssetMapService {
     private final Gson gson;
 
     /**
-     * Creates a new AssetMapService instance.
-     * 
+     * Creates a new AssetService instance.
+     *
      * @param apiBaseUrl     The base API URL
      * @param apiKey         The API key for authentication
      * @param requestTimeout Request timeout in milliseconds
      * @param maxRetries     Maximum number of retry attempts
      * @param debugMode      Whether debug logging is enabled
      */
-    public AssetMapService(String apiBaseUrl, String apiKey, int requestTimeout, int maxRetries, boolean debugMode) {
+    public AssetService(String apiBaseUrl, String apiKey, int requestTimeout, int maxRetries, boolean debugMode) {
         this.apiBaseUrl = apiBaseUrl != null ? apiBaseUrl.trim() : "";
         this.apiKey = apiKey != null ? apiKey.trim() : "";
         this.requestTimeout = requestTimeout;
@@ -66,11 +65,11 @@ public class AssetMapService {
 
     /**
      * Sends asset map data to the API asynchronously.
-     * 
+     *
      * <p>
      * Sends block configuration data to the /world/{worldId}/asset-map endpoint.
      * </p>
-     * 
+     *
      * @param worldId  The world identifier
      * @param assetMap List of block configurations
      * @return CompletableFuture that completes with true on success, false on
@@ -108,7 +107,7 @@ public class AssetMapService {
 
     /**
      * Sends asset map to API endpoint /world/{worldId}/asset-map.
-     * 
+     *
      * @param worldId  The world identifier
      * @param assetMap List of block configurations
      * @return true if successful, false otherwise
@@ -228,7 +227,7 @@ public class AssetMapService {
 
     /**
      * Builds the API URL for the asset map endpoint.
-     * 
+     *
      * @param worldId The world identifier
      * @return The complete API URL, or null if base URL is not configured
      */
@@ -247,7 +246,7 @@ public class AssetMapService {
 
     /**
      * Converts an asset map entry to a JSON object.
-     * 
+     *
      * @param entry The block configuration entry
      * @return The JSON object representation
      */

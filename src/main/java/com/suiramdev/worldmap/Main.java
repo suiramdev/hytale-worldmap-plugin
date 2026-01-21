@@ -8,9 +8,9 @@ import com.hypixel.hytale.server.core.universe.world.World;
 import com.hypixel.hytale.server.core.universe.world.storage.ChunkStore;
 import com.hypixel.hytale.server.core.universe.world.storage.IChunkLoader;
 import com.suiramdev.worldmap.config.PluginConfig;
-import com.suiramdev.worldmap.managers.AssetMapManager;
+import com.suiramdev.worldmap.managers.AssetManager;
 import com.suiramdev.worldmap.managers.ChunkManager;
-import com.suiramdev.worldmap.services.AssetMapService;
+import com.suiramdev.worldmap.services.AssetService;
 import com.suiramdev.worldmap.services.ChunkService;
 import it.unimi.dsi.fastutil.longs.LongSet;
 
@@ -39,11 +39,11 @@ public class Main extends JavaPlugin {
     // Configuration and services
     private PluginConfig config;
     private ChunkService chunkService;
-    private AssetMapService assetMapService;
+    private AssetService assetService;
 
     // Managers
     private ChunkManager chunkManager;
-    private AssetMapManager assetMapManager;
+    private AssetManager assetManager;
 
     // Plugin data
     private File dataFolder;
@@ -128,8 +128,8 @@ public class Main extends JavaPlugin {
                 config.getMaxRetries(),
                 config.isDebugMode());
 
-        // Initialize asset map service
-        assetMapService = new AssetMapService(
+        // Initialize asset service (handles asset-map)
+        assetService = new AssetService(
                 config.getApiBaseUrl(),
                 config.getApiKey(),
                 config.getRequestTimeout(),
@@ -141,12 +141,12 @@ public class Main extends JavaPlugin {
      * Initializes all manager instances.
      */
     private void initializeManagers() {
-        // Initialize asset map manager
-        assetMapManager = new AssetMapManager(config.isDebugMode());
+        // Initialize asset manager
+        assetManager = new AssetManager(config.isDebugMode());
 
-        // Initialize chunk manager (requires asset map service and manager for
+        // Initialize chunk manager (requires asset service and manager for
         // coordination)
-        chunkManager = new ChunkManager(chunkService, assetMapService, assetMapManager, config.isDebugMode());
+        chunkManager = new ChunkManager(chunkService, assetService, assetManager, config.isDebugMode());
     }
 
     /**
@@ -183,7 +183,7 @@ public class Main extends JavaPlugin {
                 System.out.println("[Worldmap] Gathered " + assetMap.size() + " block entries for asset map");
 
                 // Send to API
-                assetMapService.sendAssetMap(worldId, assetMap)
+                assetService.sendAssetMap(worldId, assetMap)
                         .thenAccept(success -> {
                             if (success) {
                                 System.out.println("[Worldmap] Asset-map sent successfully for world: " + worldId);
@@ -215,7 +215,7 @@ public class Main extends JavaPlugin {
         long delayMs = 1000; // Start with 1 second delay
 
         for (int attempt = 0; attempt < maxRetries; attempt++) {
-            var assetMap = assetMapManager.gatherAssetMap();
+            var assetMap = assetManager.gatherAssetMap();
 
             if (assetMap != null && !assetMap.isEmpty()) {
                 if (attempt > 0) {
@@ -470,7 +470,7 @@ public class Main extends JavaPlugin {
      * 
      * @return The asset map service
      */
-    public AssetMapService getAssetMapService() {
-        return assetMapService;
+    public AssetService getAssetService() {
+        return assetService;
     }
 }

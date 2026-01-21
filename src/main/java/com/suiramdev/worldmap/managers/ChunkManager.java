@@ -5,7 +5,7 @@ import com.hypixel.hytale.server.core.universe.world.chunk.WorldChunk;
 import com.suiramdev.worldmap.Main;
 import com.suiramdev.worldmap.models.ChunkPayload;
 import com.suiramdev.worldmap.models.ChunkSendResult;
-import com.suiramdev.worldmap.services.AssetMapService;
+import com.suiramdev.worldmap.services.AssetService;
 import com.suiramdev.worldmap.services.ChunkService;
 
 import java.util.HashSet;
@@ -30,8 +30,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class ChunkManager {
 
     private final ChunkService chunkService;
-    private final AssetMapService assetMapService;
-    private final AssetMapManager assetMapManager;
+    private final AssetService assetService;
+    private final AssetManager assetManager;
     private final boolean debugMode;
     private final ExecutorService executorService;
     private final AtomicInteger processedCount = new AtomicInteger(0);
@@ -43,16 +43,16 @@ public class ChunkManager {
     /**
      * Creates a new ChunkManager instance.
      * 
-     * @param chunkService    The chunk service for API communication
-     * @param assetMapService The asset map service for sending asset maps
-     * @param assetMapManager The asset map manager for gathering asset maps
-     * @param debugMode       Whether debug logging is enabled
+     * @param chunkService The chunk service for API communication
+     * @param assetService The asset service for sending asset maps and packs
+     * @param assetManager The asset manager for gathering asset maps
+     * @param debugMode    Whether debug logging is enabled
      */
-    public ChunkManager(ChunkService chunkService, AssetMapService assetMapService,
-            AssetMapManager assetMapManager, boolean debugMode) {
+    public ChunkManager(ChunkService chunkService, AssetService assetService,
+            AssetManager assetManager, boolean debugMode) {
         this.chunkService = chunkService;
-        this.assetMapService = assetMapService;
-        this.assetMapManager = assetMapManager;
+        this.assetService = assetService;
+        this.assetManager = assetManager;
         this.debugMode = debugMode;
         this.executorService = Executors.newFixedThreadPool(10);
     }
@@ -165,7 +165,7 @@ public class ChunkManager {
             }
 
             // Gather asset map
-            var assetMap = assetMapManager.gatherAssetMap();
+            var assetMap = assetManager.gatherAssetMap();
             if (assetMap == null || assetMap.isEmpty()) {
                 System.err.println("[Worldmap] No asset map data gathered");
                 return false;
@@ -174,7 +174,7 @@ public class ChunkManager {
             System.out.println("[Worldmap] Sending asset-map (" + assetMap.size() + " entries) for world: " + worldId);
 
             // Send asset-map
-            boolean assetMapSent = assetMapService.sendAssetMap(worldId, assetMap).join();
+            boolean assetMapSent = assetService.sendAssetMap(worldId, assetMap).join();
             if (!assetMapSent) {
                 System.err.println("[Worldmap] Failed to send asset-map");
                 return false;
