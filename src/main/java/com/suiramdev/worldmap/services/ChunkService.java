@@ -2,6 +2,11 @@ package com.suiramdev.worldmap.services;
 
 import com.suiramdev.worldmap.models.ChunkPayload;
 import com.github.luben.zstd.Zstd;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 
 import java.io.IOException;
 import java.net.URI;
@@ -9,6 +14,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Semaphore;
 
@@ -35,6 +42,7 @@ public class ChunkService {
     private final HttpClient httpClient;
     private final Semaphore rateLimiter; // Limit concurrent requests (max 5)
     private static boolean connectionWarningShown = false; // Track if we've shown the connection warning
+    private final Gson gson;
 
     /**
      * Creates a new ChunkService instance.
@@ -57,6 +65,7 @@ public class ChunkService {
                 .build();
 
         this.rateLimiter = new Semaphore(5); // Max 5 concurrent requests
+        this.gson = new GsonBuilder().create();
     }
 
     /**
@@ -270,6 +279,223 @@ public class ChunkService {
         }
 
         return false;
+    }
+
+    /**
+     * Fetches the list of processed chunks from the API.
+     * 
+     * <p>
+     * Calls GET /api/worlds/:worldId/chunks/list to retrieve all chunks that
+     * have been processed.
+     * </p>
+     * 
+     * @param worldId The world identifier
+     * @return CompletableFuture that completes with a Set of processed chunk keys
+     *         (format: "x,z"), or empty set on failure
+     */
+    public CompletableFuture<Set<String>> fetchProcessedChunksList(String worldId) {
+        return CompletableFuture.supplyAsync(() -> {
+            if (worldId == null || worldId.trim().isEmpty()) {
+                System.err.println("[Worldmap] Invalid worldId provided to fetchProcessedChunksList");
+                return new HashSet<>();
+            }
+
+            String apiUrl = buildChunksListApiUrl(worldId);
+            if (apiUrl == null) {
+                return new HashSet<>();
+            }
+
+            int attempt = 0;
+            while (attempt < maxRetries) {
+                try {
+                    URI uri = URI.create(apiUrl);
+
+                    HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
+                            .uri(uri)
+                            .header("Accept", "application/json")
+                            .GET()
+                            .timeout(Duration.ofMillis(requestTimeout));
+
+                    // Add Authorization header with API key if provided
+                    if (apiKey != null && !apiKey.isEmpty()) {
+                        requestBuilder.header("Authorization", apiKey);
+                    }
+
+                    HttpRequest httpRequest = requestBuilder.build();
+
+                    if (debugMode || attempt == 0) {
+                        System.out.println("[Worldmap] Fetching processed chunks list from " + apiUrl
+                                + " (attempt " + (attempt + 1) + "/" + maxRetries + ")");
+                    }
+
+                    HttpResponse<String> response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
+
+                    int statusCode = response.statusCode();
+                    String responseBody = response.body();
+
+                    if (statusCode >= 200 && statusCode < 300) {
+                        Set<String> processedChunks = parseProcessedChunksResponse(responseBody);
+                        System.out.println("[Worldmap] Successfully fetched " + processedChunks.size()
+                                + " processed chunks from API");
+                        return processedChunks;
+                    } else {
+                        System.err.println("[Worldmap] API returned error status " + statusCode
+                                + " when fetching processed chunks list");
+                        if (responseBody != null && !responseBody.isEmpty()) {
+                            String bodyPreview = responseBody.length() > 500
+                                    ? responseBody.substring(0, 500) + "... (truncated)"
+                                    : responseBody;
+                            System.err.println("[Worldmap] Error response body: " + bodyPreview);
+                        }
+                    }
+                } catch (IOException e) {
+                    String errorMsg = e.getMessage();
+                    if (errorMsg == null || errorMsg.isEmpty()) {
+                        errorMsg = e.getClass().getSimpleName() + " (no message)";
+                    }
+                    if (debugMode || attempt == maxRetries - 1) {
+                        System.err.println("[Worldmap] IO error fetching processed chunks list: " + errorMsg);
+                        if (debugMode) {
+                            e.printStackTrace();
+                        }
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    System.err.println("[Worldmap] Request interrupted while fetching processed chunks list");
+                    return new HashSet<>();
+                } catch (Exception e) {
+                    String errorMsg = e.getMessage();
+                    if (errorMsg == null || errorMsg.isEmpty()) {
+                        errorMsg = e.getClass().getSimpleName() + " (no message)";
+                    }
+                    if (debugMode || attempt == maxRetries - 1) {
+                        System.err.println("[Worldmap] Unexpected error fetching processed chunks list: " + errorMsg);
+                        if (debugMode) {
+                            e.printStackTrace();
+                        }
+                    }
+                }
+
+                attempt++;
+                if (attempt < maxRetries) {
+                    // Exponential backoff
+                    long delayMs = (long) Math.pow(2, attempt - 1) * 1000;
+                    System.out.println("[Worldmap] Retrying fetch processed chunks list in " + delayMs
+                            + "ms (attempt " + (attempt + 1) + "/" + maxRetries + ")");
+                    try {
+                        Thread.sleep(delayMs);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return new HashSet<>();
+                    }
+                } else {
+                    System.err.println("[Worldmap] Failed to fetch processed chunks list after " + maxRetries
+                            + " attempts");
+                }
+            }
+
+            return new HashSet<>();
+        });
+    }
+
+    /**
+     * Parses the API response containing processed chunks list.
+     * 
+     * <p>
+     * Supports multiple response formats:
+     * <ul>
+     * <li>Array of objects: [{"x": 1, "z": 2}, ...]</li>
+     * <li>Array of strings: ["1,2", "3,4", ...]</li>
+     * <li>Object with chunks array: {"chunks": [{"x": 1, "z": 2}, ...]}</li>
+     * </ul>
+     * </p>
+     * 
+     * @param responseBody The JSON response body
+     * @return Set of chunk keys in format "x,z"
+     */
+    private Set<String> parseProcessedChunksResponse(String responseBody) {
+        Set<String> processedChunks = new HashSet<>();
+
+        if (responseBody == null || responseBody.trim().isEmpty()) {
+            return processedChunks;
+        }
+
+        try {
+            JsonElement jsonElement = gson.fromJson(responseBody, JsonElement.class);
+
+            if (jsonElement == null) {
+                return processedChunks;
+            }
+
+            JsonArray chunksArray = null;
+
+            // Check if it's an object with a "chunks" property
+            if (jsonElement.isJsonObject()) {
+                JsonObject jsonObject = jsonElement.getAsJsonObject();
+                if (jsonObject.has("chunks") && jsonObject.get("chunks").isJsonArray()) {
+                    chunksArray = jsonObject.getAsJsonArray("chunks");
+                }
+            }
+            // Check if it's directly an array
+            else if (jsonElement.isJsonArray()) {
+                chunksArray = jsonElement.getAsJsonArray();
+            }
+
+            if (chunksArray == null) {
+                System.err.println("[Worldmap] Unexpected response format for processed chunks list");
+                return processedChunks;
+            }
+
+            // Parse each chunk entry
+            for (JsonElement element : chunksArray) {
+                if (element.isJsonObject()) {
+                    // Format: {"x": 1, "z": 2}
+                    JsonObject chunkObj = element.getAsJsonObject();
+                    if (chunkObj.has("x") && chunkObj.has("z")) {
+                        int x = chunkObj.get("x").getAsInt();
+                        int z = chunkObj.get("z").getAsInt();
+                        processedChunks.add(x + "," + z);
+                    }
+                } else if (element.isJsonPrimitive()) {
+                    // Format: "1,2"
+                    String chunkKey = element.getAsString();
+                    if (chunkKey != null && !chunkKey.trim().isEmpty()) {
+                        processedChunks.add(chunkKey.trim());
+                    }
+                }
+            }
+
+        } catch (Exception e) {
+            System.err.println("[Worldmap] Error parsing processed chunks response: " + e.getMessage());
+            if (debugMode) {
+                e.printStackTrace();
+            }
+        }
+
+        return processedChunks;
+    }
+
+    /**
+     * Builds the API URL for the chunks list endpoint.
+     * 
+     * <p>
+     * Constructs: {baseUrl}/api/worlds/:worldId/chunks/list
+     * </p>
+     * 
+     * @param worldId The world identifier
+     * @return The complete chunks list API URL, or null if base URL is not
+     *         configured
+     */
+    private String buildChunksListApiUrl(String worldId) {
+        if (apiBaseUrl == null || apiBaseUrl.isEmpty()) {
+            return null;
+        }
+
+        // Remove trailing slash from base URL if present
+        String baseUrl = apiBaseUrl.endsWith("/") ? apiBaseUrl.substring(0, apiBaseUrl.length() - 1) : apiBaseUrl;
+
+        // Build full URL: {baseUrl}/api/worlds/:worldId/chunks/list
+        return baseUrl + "/worlds/" + worldId + "/chunks/list";
     }
 
     /**

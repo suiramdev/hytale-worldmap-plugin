@@ -57,13 +57,8 @@ public class ChunkManager {
      *         failure
      */
     public CompletableFuture<Boolean> processChunk(int chunkX, int chunkZ, Object chunk, World world) {
-        // Check if already processed
-        if (storageService.isChunkProcessed(chunkX, chunkZ)) {
-            if (debugMode) {
-                System.out.println("[Worldmap] Chunk (" + chunkX + "," + chunkZ + ") already processed, skipping");
-            }
-            return CompletableFuture.completedFuture(true);
-        }
+        // Note: Chunk processing status is now tracked via API, not local storage
+        // The check for already-processed chunks is done in Main.java using the API list
 
         return CompletableFuture.supplyAsync(() -> {
             try {
@@ -74,7 +69,7 @@ public class ChunkManager {
                 return chunkService.sendChunkData(payload)
                         .thenApply(success -> {
                             if (success) {
-                                storageService.markChunkProcessed(chunkX, chunkZ);
+                                // Don't mark as processed in local storage - API tracks this
                                 int count = processedCount.incrementAndGet();
 
                                 // Log progress every 100 chunks

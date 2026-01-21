@@ -18,6 +18,8 @@ import it.unimi.dsi.fastutil.longs.LongSet;
 import javax.annotation.Nonnull;
 import java.io.File;
 import java.io.IOException;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -49,6 +51,9 @@ public class Main extends JavaPlugin {
 
     // Plugin data
     private File dataFolder;
+    
+    // Processed chunks from API (set on startup)
+    private Set<String> processedChunksFromApi = new HashSet<>();
 
     /**
      * Constructor - Called when plugin is loaded.
@@ -83,14 +88,33 @@ public class Main extends JavaPlugin {
             // Initialize managers
             initializeManagers();
 
-            // Get processed chunk count
-            int processedCount = storageService.getProcessedChunkCount();
-            System.out.println("[Worldmap] Plugin loaded - " + processedCount + " chunks already processed");
+            // Fetch processed chunks list from API first (wait for it)
+            String worldId = getWorldId();
+            if (worldId != null && !worldId.isEmpty()) {
+                System.out.println("[Worldmap] Fetching processed chunks list from API...");
+                try {
+                    Set<String> chunks = chunkService.fetchProcessedChunksList(worldId).join();
+                    synchronized (this) {
+                        processedChunksFromApi = chunks;
+                    }
+                    System.out.println("[Worldmap] Loaded " + chunks.size()
+                            + " processed chunks from API. Missing chunks will be sent.");
+                } catch (Exception e) {
+                    System.err.println("[Worldmap] Failed to fetch processed chunks list: " + e.getMessage());
+                    if (config.isDebugMode()) {
+                        e.printStackTrace();
+                    }
+                    System.out.println("[Worldmap] Will process all chunks (API fetch failed)");
+                }
+            } else {
+                System.err.println(
+                        "[Worldmap] WARNING: worldId not configured, cannot fetch processed chunks list");
+            }
 
             // Send asset map on startup
             sendAssetMapOnStartup();
 
-            // Process chunks asynchronously
+            // Process chunks asynchronously (will use API list)
             processAllChunksAsync();
 
         } catch (Exception e) {
@@ -151,6 +175,7 @@ public class Main extends JavaPlugin {
         // Initialize asset map manager
         assetMapManager = new AssetMapManager(config.isDebugMode());
     }
+
 
     /**
      * Sends asset map to API on plugin startup.
@@ -300,10 +325,14 @@ public class Main extends JavaPlugin {
                 int chunkX = ChunkUtil.xOfChunkIndex(chunkIndex);
                 int chunkZ = ChunkUtil.zOfChunkIndex(chunkIndex);
 
-                // Check if chunk has already been processed
-                if (storageService.isChunkProcessed(chunkX, chunkZ)) {
-                    skipped++;
-                    continue;
+                // Check if chunk has already been processed (using API list)
+                // Use synchronized access since the list may still be loading
+                String chunkKey = chunkX + "," + chunkZ;
+                synchronized (this) {
+                    if (processedChunksFromApi.contains(chunkKey)) {
+                        skipped++;
+                        continue;
+                    }
                 }
 
                 // Get chunk asynchronously (non-ticking to avoid affecting gameplay)
