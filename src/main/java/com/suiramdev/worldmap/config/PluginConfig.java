@@ -23,7 +23,6 @@ public class PluginConfig {
 
     private String apiUrl = "http://localhost:3000/api";
     private String apiKey = "";
-    private String worldId = "";
     private int requestTimeout = 30000;
     private int maxRetries = 3;
     private int batchSize = 10;
@@ -61,8 +60,6 @@ public class PluginConfig {
                     this.apiUrl = data.apiUrl;
                 if (data.apiKey != null)
                     this.apiKey = data.apiKey;
-                if (data.worldId != null)
-                    this.worldId = data.worldId;
                 if (data.requestTimeout > 0)
                     this.requestTimeout = data.requestTimeout;
                 if (data.maxRetries > 0)
@@ -92,7 +89,6 @@ public class PluginConfig {
             ConfigData data = new ConfigData();
             data.apiUrl = this.apiUrl;
             data.apiKey = this.apiKey;
-            data.worldId = this.worldId;
             data.requestTimeout = this.requestTimeout;
             data.maxRetries = this.maxRetries;
             data.batchSize = this.batchSize;
@@ -122,15 +118,6 @@ public class PluginConfig {
      */
     public String getApiKey() {
         return apiKey;
-    }
-
-    /**
-     * Gets the world identifier.
-     * 
-     * @return The world identifier, or empty string if not configured
-     */
-    public String getWorldId() {
-        return worldId != null ? worldId.trim() : "";
     }
 
     /**
@@ -175,7 +162,6 @@ public class PluginConfig {
     private static class ConfigData {
         String apiUrl;
         String apiKey;
-        String worldId;
         int requestTimeout;
         int maxRetries;
         int batchSize;

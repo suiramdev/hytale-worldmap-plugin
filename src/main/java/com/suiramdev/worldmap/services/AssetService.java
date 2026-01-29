@@ -65,28 +65,21 @@ public class AssetService {
 
     /**
      * Sends asset map data to the API asynchronously.
+     * World is derived from the API key (key is linked to a world).
      *
      * <p>
-     * Sends block configuration data to the /world/{worldId}/asset-map endpoint.
+     * Sends block configuration data to the POST /api/asset-map endpoint.
      * </p>
      *
-     * @param worldId  The world identifier
      * @param assetMap List of block configurations
      * @return CompletableFuture that completes with true on success, false on
      *         failure
      */
-    public CompletableFuture<Boolean> sendAssetMap(String worldId, List<AssetMapPayload> assetMap) {
-        if (worldId == null || worldId.trim().isEmpty()) {
-            System.err.println("[Worldmap] Invalid worldId provided to sendAssetMap");
-            return CompletableFuture.completedFuture(false);
-        }
-
+    public CompletableFuture<Boolean> sendAssetMap(List<AssetMapPayload> assetMap) {
         if (assetMap == null || assetMap.isEmpty()) {
             System.err.println("[Worldmap] No asset map data provided");
             return CompletableFuture.completedFuture(false);
         }
-
-        String normalizedWorldId = worldId.trim();
 
         return CompletableFuture.supplyAsync(() -> {
             try {
@@ -94,7 +87,7 @@ public class AssetService {
                         "[Worldmap] Sending " + assetMap.size() + " block entries for asset map");
 
                 // Send to API endpoint
-                return sendAssetMapToApi(normalizedWorldId, assetMap);
+                return sendAssetMapToApi(assetMap);
             } catch (Exception e) {
                 System.err.println("[Worldmap] Error sending asset map: " + e.getMessage());
                 if (debugMode) {
@@ -106,14 +99,14 @@ public class AssetService {
     }
 
     /**
-     * Sends asset map to API endpoint /world/{worldId}/asset-map.
+     * Sends asset map to API endpoint POST /api/asset-map.
+     * World is derived from the API key.
      *
-     * @param worldId  The world identifier
      * @param assetMap List of block configurations
      * @return true if successful, false otherwise
      */
-    private boolean sendAssetMapToApi(String worldId, List<AssetMapPayload> assetMap) {
-        String apiUrl = buildAssetMapApiUrl(worldId);
+    private boolean sendAssetMapToApi(List<AssetMapPayload> assetMap) {
+        String apiUrl = buildAssetMapApiUrl();
         if (apiUrl == null) {
             return false;
         }
@@ -161,12 +154,11 @@ public class AssetService {
                 String responseBody = response.body();
 
                 if (statusCode >= 200 && statusCode < 300) {
-                    System.out.println("[Worldmap] Successfully sent asset map for world '" + worldId + "' - Status: "
-                            + statusCode);
+                    System.out.println("[Worldmap] Successfully sent asset map - Status: " + statusCode);
                     return true;
                 } else {
                     System.err.println(
-                            "[Worldmap] API returned error status " + statusCode + " for world '" + worldId + "'");
+                            "[Worldmap] API returned error status " + statusCode + " for asset-map");
                     if (responseBody != null && !responseBody.isEmpty()) {
                         String bodyPreview = responseBody.length() > 500
                                 ? responseBody.substring(0, 500) + "... (truncated)"
@@ -181,14 +173,14 @@ public class AssetService {
                 }
                 if (debugMode || attempt == maxRetries - 1) {
                     System.err
-                            .println("[Worldmap] IO error sending asset map for world '" + worldId + "': " + errorMsg);
+                            .println("[Worldmap] IO error sending asset map: " + errorMsg);
                     if (debugMode) {
                         e.printStackTrace();
                     }
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                System.err.println("[Worldmap] Request interrupted for world '" + worldId + "'");
+                System.err.println("[Worldmap] Request interrupted for asset-map");
                 return false;
             } catch (Exception e) {
                 String errorMsg = e.getMessage();
@@ -197,7 +189,7 @@ public class AssetService {
                 }
                 if (debugMode || attempt == maxRetries - 1) {
                     System.err.println(
-                            "[Worldmap] Unexpected error sending asset map for world '" + worldId + "': " + errorMsg);
+                            "[Worldmap] Unexpected error sending asset map: " + errorMsg);
                     if (debugMode) {
                         e.printStackTrace();
                     }
@@ -208,7 +200,7 @@ public class AssetService {
             if (attempt < maxRetries) {
                 // Exponential backoff
                 long delayMs = (long) Math.pow(2, attempt - 1) * 1000;
-                System.out.println("[Worldmap] Retrying asset map send for world '" + worldId + "' in " + delayMs
+                System.out.println("[Worldmap] Retrying asset map send in " + delayMs
                         + "ms (attempt " + (attempt + 1) + "/" + maxRetries + ")");
                 try {
                     Thread.sleep(delayMs);
@@ -217,8 +209,7 @@ public class AssetService {
                     return false;
                 }
             } else {
-                System.err.println("[Worldmap] Failed to send asset map for world '" + worldId + "' after " + maxRetries
-                        + " attempts");
+                System.err.println("[Worldmap] Failed to send asset map after " + maxRetries + " attempts");
             }
         }
 
@@ -227,11 +218,11 @@ public class AssetService {
 
     /**
      * Builds the API URL for the asset map endpoint.
+     * World is derived from the API key.
      *
-     * @param worldId The world identifier
      * @return The complete API URL, or null if base URL is not configured
      */
-    private String buildAssetMapApiUrl(String worldId) {
+    private String buildAssetMapApiUrl() {
         if (apiBaseUrl == null || apiBaseUrl.isEmpty()) {
             System.err.println("[Worldmap] API base URL is not configured");
             return null;
@@ -240,8 +231,7 @@ public class AssetService {
         // Remove trailing slash from base URL if present
         String baseUrl = apiBaseUrl.endsWith("/") ? apiBaseUrl.substring(0, apiBaseUrl.length() - 1) : apiBaseUrl;
 
-        // Build full URL: {baseUrl}/world/{worldId}/asset-map
-        return baseUrl + "/worlds/" + worldId + "/asset-map";
+        return baseUrl + "/api/asset-map";
     }
 
     /**

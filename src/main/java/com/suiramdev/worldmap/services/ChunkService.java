@@ -70,19 +70,20 @@ public class ChunkService {
 
     /**
      * Sends chunk data to the API asynchronously.
-     * 
+     * World is derived from the API key (key is linked to a world).
+     *
      * @param payload ChunkPayload containing compact, binary-friendly chunk data
      * @return CompletableFuture that completes with ChunkSendResult indicating
      *         success, failure, or if asset-map is needed
      */
-    public CompletableFuture<ChunkSendResult> sendChunkData(ChunkPayload payload, String worldId) {
+    public CompletableFuture<ChunkSendResult> sendChunkData(ChunkPayload payload) {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 // Acquire permit for rate limiting
                 rateLimiter.acquire();
 
                 try {
-                    return sendChunkDataToApi(payload, worldId);
+                    return sendChunkDataToApi(payload);
                 } finally {
                     rateLimiter.release();
                 }
@@ -99,17 +100,17 @@ public class ChunkService {
 
     /**
      * Sends chunk data to API endpoint with retry logic.
-     * 
+     *
      * @param payload The chunk payload to send
      * @return ChunkSendResult indicating success, failure, or if asset-map is
      *         needed
      */
-    private ChunkSendResult sendChunkDataToApi(ChunkPayload payload, String worldId) {
+    private ChunkSendResult sendChunkDataToApi(ChunkPayload payload) {
         int chunkX = payload.chunkX;
         int chunkZ = payload.chunkZ;
 
-        // Build the chunk API URL
-        String apiUrl = buildChunkApiUrl(worldId);
+        // Build the chunk API URL (world derived from API key)
+        String apiUrl = buildChunkApiUrl();
         if (apiUrl == null) {
             System.err.println("[Worldmap] API URL is not configured for chunk (" + chunkX + "," + chunkZ + ")");
             return ChunkSendResult.failure();
@@ -281,24 +282,18 @@ public class ChunkService {
 
     /**
      * Fetches the list of processed chunks from the API.
-     * 
+     * World is derived from the API key (key is linked to a world).
+     *
      * <p>
-     * Calls GET /api/worlds/:worldId/chunks/list to retrieve all chunks that
-     * have been processed.
+     * Calls GET /api/chunks/list to retrieve all chunks that have been processed.
      * </p>
-     * 
-     * @param worldId The world identifier
+     *
      * @return CompletableFuture that completes with a Set of processed chunk keys
      *         (format: "x,z"), or empty set on failure
      */
-    public CompletableFuture<Set<String>> fetchProcessedChunksList(String worldId) {
+    public CompletableFuture<Set<String>> fetchProcessedChunksList() {
         return CompletableFuture.supplyAsync(() -> {
-            if (worldId == null || worldId.trim().isEmpty()) {
-                System.err.println("[Worldmap] Invalid worldId provided to fetchProcessedChunksList");
-                return new HashSet<>();
-            }
-
-            String apiUrl = buildChunksListApiUrl(worldId);
+            String apiUrl = buildChunksListApiUrl();
             if (apiUrl == null) {
                 return new HashSet<>();
             }
@@ -503,16 +498,16 @@ public class ChunkService {
 
     /**
      * Builds the API URL for the chunks list endpoint.
-     * 
+     * World is derived from the API key.
+     *
      * <p>
-     * Constructs: {baseUrl}/api/worlds/:worldId/chunks/list
+     * Constructs: {baseUrl}/api/chunks/list
      * </p>
-     * 
-     * @param worldId The world identifier
+     *
      * @return The complete chunks list API URL, or null if base URL is not
      *         configured
      */
-    private String buildChunksListApiUrl(String worldId) {
+    private String buildChunksListApiUrl() {
         if (apiBaseUrl == null || apiBaseUrl.isEmpty()) {
             return null;
         }
@@ -520,22 +515,21 @@ public class ChunkService {
         // Remove trailing slash from base URL if present
         String baseUrl = apiBaseUrl.endsWith("/") ? apiBaseUrl.substring(0, apiBaseUrl.length() - 1) : apiBaseUrl;
 
-        // Build full URL: {baseUrl}/api/worlds/:worldId/chunks/list
-        return baseUrl + "/worlds/" + worldId + "/chunks/list";
+        return baseUrl + "/api/chunks/list";
     }
 
     /**
      * Builds the API URL for the chunk processing endpoint.
-     * 
+     * World is derived from the API key.
+     *
      * <p>
-     * Constructs: {baseUrl}/api/worlds/:worldId/chunks/process
+     * Constructs: {baseUrl}/api/chunks/process
      * </p>
-     * 
-     * @param worldId The world identifier
+     *
      * @return The complete chunk processing API URL, or null if base URL is not
      *         configured
      */
-    private String buildChunkApiUrl(String worldId) {
+    private String buildChunkApiUrl() {
         if (apiBaseUrl == null || apiBaseUrl.isEmpty()) {
             return null;
         }
@@ -543,8 +537,7 @@ public class ChunkService {
         // Remove trailing slash from base URL if present
         String baseUrl = apiBaseUrl.endsWith("/") ? apiBaseUrl.substring(0, apiBaseUrl.length() - 1) : apiBaseUrl;
 
-        // Build full URL: {baseUrl}/api/worlds/:worldId/chunks/process
-        return baseUrl + "/worlds/" + worldId + "/chunks/process";
+        return baseUrl + "/api/chunks/process";
     }
 
     /**

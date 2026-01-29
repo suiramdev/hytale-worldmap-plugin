@@ -1,8 +1,8 @@
 package com.suiramdev.worldmap.managers;
 
+import com.hypixel.hytale.math.util.ChunkUtil;
 import com.hypixel.hytale.server.core.universe.world.World;
 import com.hypixel.hytale.server.core.universe.world.chunk.WorldChunk;
-import com.suiramdev.worldmap.Main;
 import com.suiramdev.worldmap.models.ChunkPayload;
 import com.suiramdev.worldmap.models.ChunkSendResult;
 import com.suiramdev.worldmap.services.AssetService;
@@ -74,26 +74,11 @@ public class ChunkManager {
 
         return CompletableFuture.supplyAsync(() -> {
             try {
-                // Get worldId from Main instance
-                Main mainInstance = Main.getInstance();
-                if (mainInstance == null) {
-                    System.err.println("[Worldmap] Main instance not available, cannot get worldId");
-                    failedCount.incrementAndGet();
-                    return false;
-                }
-
-                String worldId = mainInstance.getWorldId();
-                if (worldId == null || worldId.trim().isEmpty()) {
-                    System.err.println("[Worldmap] worldId not available, cannot send chunk");
-                    failedCount.incrementAndGet();
-                    return false;
-                }
-
                 // Extract chunk data with halo padding
                 ChunkPayload payload = extractChunkPayload(chunk, chunkX, chunkZ, world);
 
-                // Send to API
-                ChunkSendResult result = chunkService.sendChunkData(payload, worldId).join();
+                // Send to API (world derived from API key)
+                ChunkSendResult result = chunkService.sendChunkData(payload).join();
 
                 // Handle the result
                 if (result.isSuccess()) {
@@ -151,19 +136,6 @@ public class ChunkManager {
      */
     private boolean sendAssetMapAndRetry(ChunkPayload payload) {
         try {
-            // Get worldId from Main instance
-            Main mainInstance = Main.getInstance();
-            if (mainInstance == null) {
-                System.err.println("[Worldmap] Main instance not available, cannot get worldId");
-                return false;
-            }
-
-            String worldId = mainInstance.getWorldId();
-            if (worldId == null || worldId.trim().isEmpty()) {
-                System.err.println("[Worldmap] worldId not available, cannot send asset-map");
-                return false;
-            }
-
             // Gather asset map
             var assetMap = assetManager.gatherAssetMap();
             if (assetMap == null || assetMap.isEmpty()) {
@@ -171,10 +143,10 @@ public class ChunkManager {
                 return false;
             }
 
-            System.out.println("[Worldmap] Sending asset-map (" + assetMap.size() + " entries) for world: " + worldId);
+            System.out.println("[Worldmap] Sending asset-map (" + assetMap.size() + " entries)");
 
-            // Send asset-map
-            boolean assetMapSent = assetService.sendAssetMap(worldId, assetMap).join();
+            // Send asset-map (world derived from API key)
+            boolean assetMapSent = assetService.sendAssetMap(assetMap).join();
             if (!assetMapSent) {
                 System.err.println("[Worldmap] Failed to send asset-map");
                 return false;
@@ -184,7 +156,7 @@ public class ChunkManager {
                     + payload.chunkZ + ")");
 
             // Retry sending the chunk
-            ChunkSendResult retryResult = chunkService.sendChunkData(payload, worldId).join();
+            ChunkSendResult retryResult = chunkService.sendChunkData(payload).join();
             return retryResult.isSuccess();
         } catch (Exception e) {
             System.err.println("[Worldmap] Error sending asset-map and retrying chunk: " + e.getMessage());
@@ -270,7 +242,8 @@ public class ChunkManager {
                     } catch (Exception e) {
                         // On error, use default tint (0)
                         if (debugMode) {
-                            System.err.println("[Worldmap] Error getting tint at (" + x + "," + z + "): " + e.getMessage());
+                            System.err.println(
+                                    "[Worldmap] Error getting tint at (" + x + "," + z + "): " + e.getMessage());
                         }
                         tintMap[x][z] = 0;
                     }
@@ -386,6 +359,43 @@ public class ChunkManager {
     }
 
     /**
+     * Schedules a chunk to be re-sent to the API (e.g. after a block place/break).
+     * Loads the chunk asynchronously and sends it without checking the processed
+     * set.
+     *
+     * @param world  The world
+     * @param chunkX Chunk X coordinate
+     * @param chunkZ Chunk Z coordinate
+     */
+    public void scheduleChunkResend(World world, int chunkX, int chunkZ) {
+        long chunkIndex = ChunkUtil.indexChunk(chunkX, chunkZ);
+        world.getNonTickingChunkAsync(chunkIndex)
+                .thenAcceptAsync(chunk -> {
+                    if (chunk != null) {
+                        processChunk(chunkX, chunkZ, chunk, world);
+                    }
+                }, executorService);
+    }
+
+    /**
+     * Processes a chunk asynchronously only if it has not already been sent to the
+     * API.
+     * Used when a new chunk is loaded (e.g. ChunkPreLoadProcessEvent).
+     *
+     * @param chunkX Chunk X coordinate
+     * @param chunkZ Chunk Z coordinate
+     * @param chunk  The chunk (e.g. from the event)
+     * @param world  The world
+     */
+    public void processChunkAsyncIfNeeded(int chunkX, int chunkZ, WorldChunk chunk, World world) {
+        executorService.execute(() -> {
+            if (!isChunkProcessed(chunkX, chunkZ)) {
+                processChunk(chunkX, chunkZ, chunk, world);
+            }
+        });
+    }
+
+    /**
      * Gets the number of failed chunk processing attempts.
      * 
      * @return The failed count
@@ -396,22 +406,17 @@ public class ChunkManager {
 
     /**
      * Fetches the list of processed chunks from the API.
-     * 
+     * World is derived from the API key.
+     *
      * <p>
      * This should be called before processing chunks to avoid sending chunks
      * that have already been processed.
      * </p>
-     * 
-     * @param worldId The world identifier
+     *
      * @return CompletableFuture that completes when the fetch is done
      */
-    public CompletableFuture<Void> fetchProcessedChunksList(String worldId) {
-        if (worldId == null || worldId.trim().isEmpty()) {
-            System.err.println("[Worldmap] WARNING: worldId not configured, cannot fetch processed chunks list");
-            return CompletableFuture.completedFuture(null);
-        }
-
-        return chunkService.fetchProcessedChunksList(worldId)
+    public CompletableFuture<Void> fetchProcessedChunksList() {
+        return chunkService.fetchProcessedChunksList()
                 .thenAccept(chunks -> {
                     synchronized (this) {
                         processedChunksFromApi = chunks;

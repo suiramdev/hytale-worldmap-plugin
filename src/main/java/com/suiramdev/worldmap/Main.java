@@ -1,11 +1,24 @@
 package com.suiramdev.worldmap;
 
+import com.hypixel.hytale.component.Archetype;
+import com.hypixel.hytale.component.ArchetypeChunk;
+import com.hypixel.hytale.component.CommandBuffer;
+import com.hypixel.hytale.component.Store;
+import com.hypixel.hytale.component.query.Query;
+import com.hypixel.hytale.component.system.EntityEventSystem;
 import com.hypixel.hytale.math.util.ChunkUtil;
+import com.hypixel.hytale.math.vector.Vector3i;
+import com.hypixel.hytale.server.core.event.events.ecs.BreakBlockEvent;
+import com.hypixel.hytale.server.core.event.events.ecs.DamageBlockEvent;
+import com.hypixel.hytale.server.core.event.events.ecs.PlaceBlockEvent;
 import com.hypixel.hytale.server.core.plugin.JavaPlugin;
 import com.hypixel.hytale.server.core.plugin.JavaPluginInit;
 import com.hypixel.hytale.server.core.universe.Universe;
 import com.hypixel.hytale.server.core.universe.world.World;
+import com.hypixel.hytale.server.core.universe.world.chunk.WorldChunk;
+import com.hypixel.hytale.server.core.universe.world.events.ChunkPreLoadProcessEvent;
 import com.hypixel.hytale.server.core.universe.world.storage.ChunkStore;
+import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
 import com.hypixel.hytale.server.core.universe.world.storage.IChunkLoader;
 import com.suiramdev.worldmap.config.PluginConfig;
 import com.suiramdev.worldmap.managers.AssetManager;
@@ -15,6 +28,7 @@ import com.suiramdev.worldmap.services.ChunkService;
 import it.unimi.dsi.fastutil.longs.LongSet;
 
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 import java.io.File;
 import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
@@ -81,15 +95,9 @@ public class Main extends JavaPlugin {
             // Initialize managers
             initializeManagers();
 
-            // Fetch processed chunks list from API first (wait for it)
-            String worldId = getWorldId();
-            if (worldId != null && !worldId.isEmpty()) {
-                System.out.println("[Worldmap] Fetching processed chunks list from API...");
-                chunkManager.fetchProcessedChunksList(worldId).join();
-            } else {
-                System.err.println(
-                        "[Worldmap] WARNING: worldId not configured, cannot fetch processed chunks list");
-            }
+            // Fetch processed chunks list from API first (wait for it; world derived from API key)
+            System.out.println("[Worldmap] Fetching processed chunks list from API...");
+            chunkManager.fetchProcessedChunksList().join();
 
             // Send asset map on startup
             sendAssetMapOnStartup();
@@ -97,10 +105,50 @@ public class Main extends JavaPlugin {
             // Process chunks asynchronously (will use API list)
             processAllChunks();
 
+            // Register for block place/break/damage to re-send modified chunks
+            registerBlockEventSystems();
+
+            // Register for new chunk loads (discovered by players) to send new chunks
+            registerChunkLoadEvent();
+
         } catch (Exception e) {
             System.err.println("[Worldmap] ERROR: Failed to initialize plugin: " + e.getMessage());
             e.printStackTrace();
         }
+    }
+
+    /**
+     * Registers ECS event systems for PlaceBlockEvent, BreakBlockEvent, and
+     * DamageBlockEvent
+     * so that modified chunks are re-sent to the API.
+     */
+    private void registerBlockEventSystems() {
+        getEntityStoreRegistry().registerSystem(new WorldmapPlaceBlockEventSystem());
+        getEntityStoreRegistry().registerSystem(new WorldmapBreakBlockEventSystem());
+        getEntityStoreRegistry().registerSystem(new WorldmapDamageBlockEventSystem());
+        System.out.println("[Worldmap] Registered block event systems (place/break/damage)");
+    }
+
+    /**
+     * Registers for ChunkPreLoadProcessEvent so that newly loaded chunks are sent
+     * to the API.
+     */
+    private void registerChunkLoadEvent() {
+        getEventRegistry().registerGlobal(ChunkPreLoadProcessEvent.class, this::onChunkPreLoadProcess);
+        System.out.println("[Worldmap] Registered chunk load event (new chunks will be sent)");
+    }
+
+    private void onChunkPreLoadProcess(ChunkPreLoadProcessEvent event) {
+        WorldChunk chunk = event.getChunk();
+        World world = chunk.getWorld();
+        // Only process chunks from the default world (same as processAllChunks)
+        Universe universe = Universe.get();
+        if (universe == null || world != universe.getDefaultWorld()) {
+            return;
+        }
+        int chunkX = chunk.getX();
+        int chunkZ = chunk.getZ();
+        chunkManager.processChunkAsyncIfNeeded(chunkX, chunkZ, chunk, world);
     }
 
     @Override
@@ -160,15 +208,7 @@ public class Main extends JavaPlugin {
     private void sendAssetMapOnStartup() {
         CompletableFuture.runAsync(() -> {
             try {
-                // Get worldId from config, with fallback to world name if not configured
-                String worldId = getWorldId();
-                if (worldId == null || worldId.isEmpty()) {
-                    System.err.println(
-                            "[Worldmap] WARNING: worldId not configured in config.json, skipping asset-map send");
-                    return;
-                }
-
-                System.out.println("[Worldmap] Sending asset-map to API for world: " + worldId);
+                System.out.println("[Worldmap] Sending asset-map to API");
 
                 // Gather asset map with retries (BlockType registry may not be ready
                 // immediately)
@@ -182,14 +222,14 @@ public class Main extends JavaPlugin {
 
                 System.out.println("[Worldmap] Gathered " + assetMap.size() + " block entries for asset map");
 
-                // Send to API
-                assetService.sendAssetMap(worldId, assetMap)
+                // Send to API (world derived from API key)
+                assetService.sendAssetMap(assetMap)
                         .thenAccept(success -> {
                             if (success) {
-                                System.out.println("[Worldmap] Asset-map sent successfully for world: " + worldId);
+                                System.out.println("[Worldmap] Asset-map sent successfully");
                             } else {
                                 System.err
-                                        .println("[Worldmap] WARNING: Failed to send asset-map for world: " + worldId);
+                                        .println("[Worldmap] WARNING: Failed to send asset-map");
                             }
                         })
                         .exceptionally(throwable -> {
@@ -277,15 +317,6 @@ public class Main extends JavaPlugin {
             if (world == null) {
                 System.err.println("[Worldmap] ERROR: Default world is not available");
                 return;
-            }
-
-            // Get worldId from config for logging
-            String worldId = getWorldId();
-            if (worldId == null || worldId.isEmpty()) {
-                System.err.println(
-                        "[Worldmap] WARNING: worldId not configured in config.json, chunk processing may fail");
-            } else {
-                System.out.println("[Worldmap] Processing chunks from world: " + worldId);
             }
 
             // Get all chunk indexes from the chunk loader
@@ -424,39 +455,6 @@ public class Main extends JavaPlugin {
     }
 
     /**
-     * Gets the world identifier from configuration, with fallback to world name if
-     * not configured.
-     * 
-     * @return The world identifier, or null if not available
-     */
-    public String getWorldId() {
-        String worldId = config.getWorldId();
-        if (worldId != null && !worldId.isEmpty()) {
-            return worldId;
-        }
-
-        // Fallback to world name if worldId is not configured
-        try {
-            Universe universe = Universe.get();
-            if (universe != null) {
-                World world = universe.getDefaultWorld();
-                if (world != null) {
-                    String worldName = world.getName();
-                    if (worldName != null && !worldName.isEmpty()) {
-                        System.err.println(
-                                "[Worldmap] WARNING: worldId not configured, falling back to world name: " + worldName);
-                        return worldName;
-                    }
-                }
-            }
-        } catch (Exception e) {
-            System.err.println("[Worldmap] ERROR: Error getting world name as fallback: " + e.getMessage());
-        }
-
-        return null;
-    }
-
-    /**
      * Gets the chunk manager.
      * 
      * @return The chunk manager
@@ -472,5 +470,77 @@ public class Main extends JavaPlugin {
      */
     public AssetService getAssetService() {
         return assetService;
+    }
+
+    // --- Block event systems (ECS) - re-send chunk to API when blocks change ---
+
+    private static final class WorldmapPlaceBlockEventSystem extends EntityEventSystem<EntityStore, PlaceBlockEvent> {
+        WorldmapPlaceBlockEventSystem() {
+            super(PlaceBlockEvent.class);
+        }
+
+        @Override
+        public void handle(int index, @Nonnull ArchetypeChunk<EntityStore> archetypeChunk,
+                @Nonnull Store<EntityStore> store, @Nonnull CommandBuffer<EntityStore> commandBuffer,
+                @Nonnull PlaceBlockEvent event) {
+            scheduleChunkResendForBlockEvent(commandBuffer, event.getTargetBlock());
+        }
+
+        @Nullable
+        @Override
+        public Query<EntityStore> getQuery() {
+            return Archetype.empty();
+        }
+    }
+
+    private static final class WorldmapBreakBlockEventSystem extends EntityEventSystem<EntityStore, BreakBlockEvent> {
+        WorldmapBreakBlockEventSystem() {
+            super(BreakBlockEvent.class);
+        }
+
+        @Override
+        public void handle(int index, @Nonnull ArchetypeChunk<EntityStore> archetypeChunk,
+                @Nonnull Store<EntityStore> store, @Nonnull CommandBuffer<EntityStore> commandBuffer,
+                @Nonnull BreakBlockEvent event) {
+            scheduleChunkResendForBlockEvent(commandBuffer, event.getTargetBlock());
+        }
+
+        @Nullable
+        @Override
+        public Query<EntityStore> getQuery() {
+            return Archetype.empty();
+        }
+    }
+
+    private static final class WorldmapDamageBlockEventSystem extends EntityEventSystem<EntityStore, DamageBlockEvent> {
+        WorldmapDamageBlockEventSystem() {
+            super(DamageBlockEvent.class);
+        }
+
+        @Override
+        public void handle(int index, @Nonnull ArchetypeChunk<EntityStore> archetypeChunk,
+                @Nonnull Store<EntityStore> store, @Nonnull CommandBuffer<EntityStore> commandBuffer,
+                @Nonnull DamageBlockEvent event) {
+            scheduleChunkResendForBlockEvent(commandBuffer, event.getTargetBlock());
+        }
+
+        @Nullable
+        @Override
+        public Query<EntityStore> getQuery() {
+            return Archetype.empty();
+        }
+    }
+
+    private static void scheduleChunkResendForBlockEvent(CommandBuffer<EntityStore> commandBuffer, Vector3i blockPos) {
+        World world = commandBuffer.getExternalData().getWorld();
+        int chunkX = ChunkUtil.chunkCoordinate(blockPos.x);
+        int chunkZ = ChunkUtil.chunkCoordinate(blockPos.z);
+        Main main = Main.getInstance();
+        if (main != null) {
+            ChunkManager cm = main.getChunkManager();
+            if (cm != null) {
+                cm.scheduleChunkResend(world, chunkX, chunkZ);
+            }
+        }
     }
 }
