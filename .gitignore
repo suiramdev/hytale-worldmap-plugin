@@ -25,3 +25,14 @@ Thumbs.db
 .bin/
 server/
 src-ref/
+Assets.zip
+auth.enc
+config.json
+config.json.bak
+universe/
+mods/
+logs/
+plugins/
+whitelist.json
+permissions.json
+bans.json
