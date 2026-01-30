@@ -59,9 +59,9 @@ public class ChunkManager {
 
     /**
      * Creates a new ChunkManager instance.
-     * 
+     *
      * @param chunkService The chunk service for API communication
-     * @param assetService The asset service for sending asset maps and packs
+     * @param assetService The asset service for sending asset maps
      * @param assetManager The asset manager for gathering asset maps
      * @param debugMode    Whether debug logging is enabled
      */
@@ -175,8 +175,7 @@ public class ChunkManager {
 
             WorldmapLog.info("Sending asset-map (%d entries)", assetMap.size());
 
-            // Send asset-map (world derived from API key)
-            boolean assetMapSent = assetService.sendAssetMap(assetMap).join();
+            boolean assetMapSent = assetService.syncAssetMap(assetMap).join();
             if (!assetMapSent) {
                 WorldmapLog.severe("Failed to send asset-map");
                 return false;

@@ -12,7 +12,12 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.util.Comparator;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -38,6 +43,7 @@ public class AssetService {
 
     private final HttpClient httpClient;
     private final Gson gson;
+    private final Gson gsonCanonical;
 
     /**
      * Creates a new AssetService instance.
@@ -62,6 +68,7 @@ public class AssetService {
         this.gson = new GsonBuilder()
                 .setPrettyPrinting()
                 .create();
+        this.gsonCanonical = new Gson(); // Compact, deterministic for manifest hash
     }
 
     /**
@@ -72,18 +79,17 @@ public class AssetService {
     }
 
     /**
-     * Sends asset map data to the API asynchronously.
-     * World is derived from the API key (key is linked to a world).
+     * Syncs asset map with the API using manifest-only content-addressed flow.
+     * Computes SHA-256 of the manifest (from BlockType.getAssetMap()), checks via
+     * POST /asset-map/check, then sends manifest + assetMapHash via POST
+     * /asset-map.
      *
-     * <p>
-     * Sends block configuration data to the POST {baseUrl}/asset-map endpoint.
-     * </p>
-     *
-     * @param assetMap List of block configurations
+     * @param assetMap List of block configurations (manifest from BlockType
+     *                 registry)
      * @return CompletableFuture that completes with true on success, false on
      *         failure
      */
-    public CompletableFuture<Boolean> sendAssetMap(List<AssetMapPayload> assetMap) {
+    public CompletableFuture<Boolean> syncAssetMap(List<AssetMapPayload> assetMap) {
         if (assetMap == null || assetMap.isEmpty()) {
             WorldmapLog.severe("No asset map data provided");
             return CompletableFuture.completedFuture(false);
@@ -91,14 +97,19 @@ public class AssetService {
 
         return CompletableFuture.supplyAsync(() -> {
             try {
-                WorldmapLog.info("Sending %d block entries for asset map", assetMap.size());
-
-                // Send to API endpoint
-                return sendAssetMapToApi(assetMap);
+                String hash = computeManifestHash(assetMap);
+                if (hash == null) {
+                    return false;
+                }
+                WorldmapLog.info("Syncing asset map (%d entries) with manifest hash %s", assetMap.size(), hash);
+                if (!checkAssetMapExists(hash)) {
+                    WorldmapLog.info("Asset map version not found on server");
+                }
+                return sendAssetMapToApi(assetMap, hash);
             } catch (Exception e) {
-                WorldmapLog.severe("Error sending asset map: %s", e.getMessage());
+                WorldmapLog.severe("Error syncing asset map: %s", e.getMessage());
                 if (debugMode) {
-                    WorldmapLog.severe("Error sending asset map", e);
+                    WorldmapLog.severe("Error syncing asset map", e);
                 }
                 return false;
             }
@@ -106,31 +117,121 @@ public class AssetService {
     }
 
     /**
-     * Sends asset map to API endpoint POST {baseUrl}/asset-map.
+     * Computes a deterministic SHA-256 hash of the manifest (canonical JSON).
+     * The hash identifies this exact set of block configs from
+     * BlockType.getAssetMap().
+     *
+     * @param assetMap List of block configurations (manifest)
+     * @return Hex-encoded SHA-256 hash, or null on error
+     */
+    public String computeManifestHash(List<AssetMapPayload> assetMap) {
+        if (assetMap == null || assetMap.isEmpty()) {
+            return null;
+        }
+        try {
+            // Deterministic order by blockId
+            List<AssetMapPayload> sorted = assetMap.stream()
+                    .sorted(Comparator.comparingInt(AssetMapPayload::getBlockId))
+                    .toList();
+            JsonArray arr = new JsonArray();
+            for (AssetMapPayload entry : sorted) {
+                JsonObject obj = assetMapEntryToJson(entry);
+                if (obj != null) {
+                    arr.add(obj);
+                }
+            }
+            String canonical = gsonCanonical.toJson(arr);
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            digest.update(canonical.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest.digest());
+        } catch (NoSuchAlgorithmException e) {
+            WorldmapLog.severe("SHA-256 not available: %s", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Checks if an asset map version (by hash) already exists on the server.
+     * POST {baseUrl}/asset-map/check with JSON body {"assetMapHash": "..."}.
+     *
+     * @param hash SHA-256 hash of the manifest (hex)
+     * @return true if the version exists, false if not or on error
+     */
+    public boolean checkAssetMapExists(String hash) {
+        if (hash == null || hash.isEmpty()) {
+            return false;
+        }
+        String apiUrl = buildAssetMapCheckUrl();
+        if (apiUrl == null) {
+            return false;
+        }
+        JsonObject body = new JsonObject();
+        body.addProperty("assetMapHash", hash);
+        String jsonPayload = gson.toJson(body);
+
+        try {
+            HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
+                    .uri(URI.create(apiUrl))
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
+                    .timeout(Duration.ofMillis(requestTimeout));
+            if (apiKey != null && !apiKey.isEmpty()) {
+                requestBuilder.header("Authorization", "Bearer " + apiKey);
+            }
+            HttpRequest request = requestBuilder.build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            int statusCode = response.statusCode();
+            String responseBody = response.body();
+            if (statusCode >= 200 && statusCode < 300 && responseBody != null) {
+                JsonObject json = gson.fromJson(responseBody, JsonObject.class);
+                if (json != null && json.has("exists")) {
+                    return json.get("exists").getAsBoolean();
+                }
+            }
+            if (debugMode && responseBody != null) {
+                WorldmapLog.info("asset-map/check response %d: %s", statusCode, responseBody);
+            }
+            return false;
+        } catch (IOException | InterruptedException e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            WorldmapLog.severe("Error checking asset map: %s", e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Sends asset map to API endpoint POST {baseUrl}/asset-map with assetMapHash
+     * and assetMap.
      * World is derived from the API key.
      *
-     * @param assetMap List of block configurations
+     * @param assetMap     List of block configurations (asset map)
+     * @param assetMapHash SHA-256 hash of the manifest (hex)
      * @return true if successful, false otherwise
      */
-    private boolean sendAssetMapToApi(List<AssetMapPayload> assetMap) {
+    private boolean sendAssetMapToApi(List<AssetMapPayload> assetMap, String assetMapHash) {
         String apiUrl = buildAssetMapApiUrl();
         if (apiUrl == null) {
             return false;
         }
 
-        // Convert asset map to JSON array
-        JsonArray blocksArray = new JsonArray();
+        JsonArray assetMapArray = new JsonArray();
         for (AssetMapPayload entry : assetMap) {
             JsonObject blockObj = assetMapEntryToJson(entry);
             if (blockObj != null) {
-                blocksArray.add(blockObj);
+                assetMapArray.add(blockObj);
             }
         }
-
-        String jsonPayload = gson.toJson(blocksArray);
+        JsonObject root = new JsonObject();
+        root.addProperty("assetMapHash", assetMapHash);
+        root.add("assetMap", assetMapArray);
+        String jsonPayload = gson.toJson(root);
         int payloadSize = jsonPayload.length();
 
-        WorldmapLog.info("Sending %d asset map entries to %s (%d bytes)", assetMap.size(), apiUrl, payloadSize);
+        WorldmapLog.info("Sending %d asset map entries with hash %s to %s (%d bytes)", assetMap.size(), assetMapHash,
+                apiUrl, payloadSize);
 
         int attempt = 0;
         while (attempt < maxRetries) {
@@ -142,7 +243,6 @@ public class AssetService {
                         .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
                         .timeout(Duration.ofMillis(requestTimeout));
 
-                // Add Authorization header with Bearer token if API key is provided
                 if (apiKey != null && !apiKey.isEmpty()) {
                     requestBuilder.header("Authorization", "Bearer " + apiKey);
                 }
@@ -200,7 +300,6 @@ public class AssetService {
 
             attempt++;
             if (attempt < maxRetries) {
-                // Exponential backoff
                 long delayMs = (long) Math.pow(2, attempt - 1) * 1000;
                 WorldmapLog.info("Retrying asset map send in %dms (attempt %d/%d)", delayMs, attempt + 1, maxRetries);
                 try {
@@ -224,15 +323,26 @@ public class AssetService {
      * @return The complete API URL, or null if base URL is not configured
      */
     private String buildAssetMapApiUrl() {
+        String baseUrl = normalizedBaseUrl();
+        return baseUrl != null ? baseUrl + "/asset-map" : null;
+    }
+
+    /**
+     * Builds the API URL for the asset map check endpoint (POST /asset-map/check).
+     *
+     * @return The complete API URL, or null if base URL is not configured
+     */
+    private String buildAssetMapCheckUrl() {
+        String baseUrl = normalizedBaseUrl();
+        return baseUrl != null ? baseUrl + "/asset-map/check" : null;
+    }
+
+    private String normalizedBaseUrl() {
         if (apiBaseUrl == null || apiBaseUrl.isEmpty()) {
             WorldmapLog.severe("API base URL is not configured");
             return null;
         }
-
-        // Remove trailing slash from base URL if present
-        String baseUrl = apiBaseUrl.endsWith("/") ? apiBaseUrl.substring(0, apiBaseUrl.length() - 1) : apiBaseUrl;
-
-        return baseUrl + "/asset-map";
+        return apiBaseUrl.endsWith("/") ? apiBaseUrl.substring(0, apiBaseUrl.length() - 1) : apiBaseUrl;
     }
 
     /**

@@ -223,8 +223,7 @@ public class Main extends JavaPlugin {
 
                 WorldmapLog.info("Gathered %d block entries for asset map", assetMap.size());
 
-                // Send to API (world derived from API key)
-                assetService.sendAssetMap(assetMap)
+                assetService.syncAssetMap(assetMap)
                         .thenAccept(success -> {
                             if (success) {
                                 WorldmapLog.info("Asset-map sent successfully");
