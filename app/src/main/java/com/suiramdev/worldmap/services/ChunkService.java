@@ -2,6 +2,7 @@ package com.suiramdev.worldmap.services;
 
 import com.suiramdev.worldmap.models.ChunkPayload;
 import com.suiramdev.worldmap.models.ChunkSendResult;
+import com.suiramdev.worldmap.util.WorldmapLog;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
@@ -34,7 +35,7 @@ import java.util.concurrent.Semaphore;
 public class ChunkService {
 
     private final String apiBaseUrl;
-    private final String apiKey;
+    private volatile String apiKey;
     private final int requestTimeout;
     private final int maxRetries;
     private final boolean debugMode;
@@ -69,6 +70,13 @@ public class ChunkService {
     }
 
     /**
+     * Updates the API key (e.g. after /worldmap key). Takes effect on next request.
+     */
+    public void setApiKey(String apiKey) {
+        this.apiKey = apiKey != null ? apiKey.trim() : "";
+    }
+
+    /**
      * Sends chunk data to the API asynchronously.
      * World is derived from the API key (key is linked to a world).
      *
@@ -90,8 +98,7 @@ public class ChunkService {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 if (debugMode && payload != null) {
-                    System.err.println(
-                            "[Worldmap] Request interrupted for chunk (" + payload.chunkX + "," + payload.chunkZ + ")");
+                    WorldmapLog.fine("Request interrupted for chunk (%d,%d)", payload.chunkX, payload.chunkZ);
                 }
                 return ChunkSendResult.failure();
             }
@@ -109,10 +116,16 @@ public class ChunkService {
         int chunkX = payload.chunkX;
         int chunkZ = payload.chunkZ;
 
+        // Missing or empty API key: do not retry; processing must be halted until user sets key
+        if (apiKey == null || apiKey.isEmpty()) {
+            WorldmapLog.severe("API key is missing. Chunk processing halted. Use /worldmap key <key> then /worldmap start.");
+            return ChunkSendResult.authFailure();
+        }
+
         // Build the chunk API URL (world derived from API key)
         String apiUrl = buildChunkApiUrl();
         if (apiUrl == null) {
-            System.err.println("[Worldmap] API URL is not configured for chunk (" + chunkX + "," + chunkZ + ")");
+            WorldmapLog.severe("API URL is not configured for chunk (%d,%d)", chunkX, chunkZ);
             return ChunkSendResult.failure();
         }
 
@@ -121,10 +134,10 @@ public class ChunkService {
         try {
             serializedData = payload.serialize();
         } catch (Exception e) {
-            System.err.println("[Worldmap] Failed to serialize chunk payload for (" + chunkX + "," + chunkZ + "): "
-                    + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
+            WorldmapLog.severe("Failed to serialize chunk payload for (%d,%d): %s",
+                    chunkX, chunkZ, e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName(), e);
             if (debugMode) {
-                e.printStackTrace();
+                WorldmapLog.severe("Serialization error", e);
             }
             return ChunkSendResult.failure();
         }
@@ -137,8 +150,7 @@ public class ChunkService {
                 try {
                     uri = URI.create(apiUrl);
                 } catch (IllegalArgumentException e) {
-                    System.err.println(
-                            "[Worldmap] Invalid API URL: " + apiUrl + " for chunk (" + chunkX + "," + chunkZ + ")");
+                    WorldmapLog.severe("Invalid API URL: %s for chunk (%d,%d)", apiUrl, chunkX, chunkZ);
                     return ChunkSendResult.failure();
                 }
 
@@ -158,9 +170,8 @@ public class ChunkService {
 
                 // Log request details
                 int rawSize = serializedData.length;
-                System.out.println("[Worldmap] Sending chunk (" + chunkX + "," + chunkZ + ") to " + apiUrl
-                        + " (attempt " + (attempt + 1) + "/" + maxRetries
-                        + ", size: " + rawSize + " bytes)");
+                WorldmapLog.info("Sending chunk (%d,%d) to %s (attempt %d/%d, size: %d bytes)",
+                        chunkX, chunkZ, apiUrl, attempt + 1, maxRetries, rawSize);
 
                 HttpResponse<String> response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
 
@@ -168,48 +179,43 @@ public class ChunkService {
                 String responseBody = response.body();
 
                 // Log response details
-                System.out.println(
-                        "[Worldmap] API response for chunk (" + chunkX + "," + chunkZ + "): Status " + statusCode);
+                WorldmapLog.info("API response for chunk (%d,%d): Status %d", chunkX, chunkZ, statusCode);
 
                 if (responseBody != null && !responseBody.isEmpty()) {
                     // Truncate very long responses for readability
                     String bodyPreview = responseBody.length() > 500
                             ? responseBody.substring(0, 500) + "... (truncated)"
                             : responseBody;
-                    System.out.println("[Worldmap] API response body: " + bodyPreview);
+                    WorldmapLog.info("API response body: %s", bodyPreview);
                 } else {
-                    System.out.println("[Worldmap] API response body: (empty)");
+                    WorldmapLog.info("API response body: (empty)");
                 }
 
                 if (debugMode) {
-                    // Log response headers in debug mode
-                    System.out.println("[Worldmap] Response headers: " + response.headers().map());
+                    WorldmapLog.fine("Response headers: %s", response.headers().map());
                 }
 
                 if (statusCode >= 200 && statusCode < 300) {
-                    System.out.println("[Worldmap] Successfully sent chunk (" + chunkX + "," + chunkZ
-                            + ") - Status: " + statusCode);
+                    WorldmapLog.info("Successfully sent chunk (%d,%d) - Status: %d", chunkX, chunkZ, statusCode);
                     return ChunkSendResult.success();
+                } else if (statusCode == 401 || statusCode == 403) {
+                    WorldmapLog.severe("API returned %d (unauthorized). Invalid or missing API key. Chunk processing halted. Use /worldmap key <key> then /worldmap start.", statusCode);
+                    return ChunkSendResult.authFailure();
                 } else if (statusCode == 428) {
                     // Check if this is ASSET_MAP_MISSING error
                     if (isAssetMapMissingError(responseBody)) {
-                        System.out.println("[Worldmap] Received 428 ASSET_MAP_MISSING for chunk (" + chunkX + ","
-                                + chunkZ + "). Asset-map is required.");
-                        // Return result indicating asset-map is needed
-                        // The manager will handle sending the asset-map and retrying
+                        WorldmapLog.info("Received 428 ASSET_MAP_MISSING for chunk (%d,%d). Asset-map is required.", chunkX, chunkZ);
                         return ChunkSendResult.needsAssetMap();
                     } else {
-                        System.err.println("[Worldmap] API returned 428 status (not ASSET_MAP_MISSING) for chunk ("
-                                + chunkX + "," + chunkZ + ")");
+                        WorldmapLog.severe("API returned 428 status (not ASSET_MAP_MISSING) for chunk (%d,%d)", chunkX, chunkZ);
                         if (responseBody != null && !responseBody.isEmpty()) {
-                            System.err.println("[Worldmap] Error response body: " + responseBody);
+                            WorldmapLog.severe("Error response body: %s", responseBody);
                         }
                     }
                 } else {
-                    System.err.println("[Worldmap] API returned error status " + statusCode + " for chunk ("
-                            + chunkX + "," + chunkZ + ")");
+                    WorldmapLog.severe("API returned error status %d for chunk (%d,%d)", statusCode, chunkX, chunkZ);
                     if (responseBody != null && !responseBody.isEmpty()) {
-                        System.err.println("[Worldmap] Error response body: " + responseBody);
+                        WorldmapLog.severe("Error response body: %s", responseBody);
                     }
                 }
             } catch (IOException e) {
@@ -223,26 +229,21 @@ public class ChunkService {
                     }
                 }
                 if (debugMode || attempt == maxRetries - 1) {
-                    System.err.println(
-                            "[Worldmap] IO error sending chunk (" + chunkX + "," + chunkZ + ") to " + apiUrl + ": "
-                                    + errorMsg);
-                    // Show connection warning once
+                    WorldmapLog.severe("IO error sending chunk (%d,%d) to %s: %s", chunkX, chunkZ, apiUrl, errorMsg);
                     if (!connectionWarningShown && (errorMsg.contains("refused") ||
                             errorMsg.contains("Unreachable") ||
                             errorMsg.contains("no message"))) {
-                        System.err.println(
-                                "[Worldmap] WARNING: Cannot connect to API server. Ensure the web application is running at "
-                                        + apiUrl);
+                        WorldmapLog.warn("Cannot connect to API server. Ensure the web application is running at %s", apiUrl);
                         connectionWarningShown = true;
                     }
                     if (debugMode) {
-                        e.printStackTrace();
+                        WorldmapLog.severe("IO error", e);
                     }
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 if (debugMode) {
-                    System.err.println("[Worldmap] Request interrupted for chunk (" + chunkX + "," + chunkZ + ")");
+                    WorldmapLog.fine("Request interrupted for chunk (%d,%d)", chunkX, chunkZ);
                 }
                 return ChunkSendResult.failure();
             } catch (Exception e) {
@@ -251,10 +252,9 @@ public class ChunkService {
                     errorMsg = e.getClass().getSimpleName() + " (no message)";
                 }
                 if (debugMode || attempt == maxRetries - 1) {
-                    System.err.println("[Worldmap] Unexpected error sending chunk (" + chunkX + "," + chunkZ + "): "
-                            + errorMsg);
+                    WorldmapLog.severe("Unexpected error sending chunk (%d,%d): %s", chunkX, chunkZ, errorMsg);
                     if (debugMode) {
-                        e.printStackTrace();
+                        WorldmapLog.severe("Unexpected error", e);
                     }
                 }
             }
@@ -263,8 +263,7 @@ public class ChunkService {
             if (attempt < maxRetries) {
                 // Exponential backoff: wait 1s, 2s, 4s, etc.
                 long delayMs = (long) Math.pow(2, attempt - 1) * 1000;
-                System.out.println("[Worldmap] Retrying chunk (" + chunkX + "," + chunkZ + ") in " + delayMs
-                        + "ms (attempt " + (attempt + 1) + "/" + maxRetries + ")");
+                WorldmapLog.info("Retrying chunk (%d,%d) in %dms (attempt %d/%d)", chunkX, chunkZ, delayMs, attempt + 1, maxRetries);
                 try {
                     Thread.sleep(delayMs);
                 } catch (InterruptedException e) {
@@ -272,8 +271,7 @@ public class ChunkService {
                     return ChunkSendResult.failure();
                 }
             } else {
-                System.err.println("[Worldmap] Failed to send chunk (" + chunkX + "," + chunkZ + ") after " + maxRetries
-                        + " attempts");
+                WorldmapLog.severe("Failed to send chunk (%d,%d) after %d attempts", chunkX, chunkZ, maxRetries);
             }
         }
 
@@ -293,6 +291,11 @@ public class ChunkService {
      */
     public CompletableFuture<Set<String>> fetchProcessedChunksList() {
         return CompletableFuture.supplyAsync(() -> {
+            if (apiKey == null || apiKey.isEmpty()) {
+                WorldmapLog.severe("API key is missing. Cannot fetch processed chunks list.");
+                return new HashSet<>();
+            }
+
             String apiUrl = buildChunksListApiUrl();
             if (apiUrl == null) {
                 return new HashSet<>();
@@ -317,8 +320,7 @@ public class ChunkService {
                     HttpRequest httpRequest = requestBuilder.build();
 
                     if (debugMode || attempt == 0) {
-                        System.out.println("[Worldmap] Fetching processed chunks list from " + apiUrl
-                                + " (attempt " + (attempt + 1) + "/" + maxRetries + ")");
+                        WorldmapLog.info("Fetching processed chunks list from %s (attempt %d/%d)", apiUrl, attempt + 1, maxRetries);
                     }
 
                     HttpResponse<String> response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
@@ -329,22 +331,23 @@ public class ChunkService {
                     if (statusCode >= 200 && statusCode < 300) {
                         Set<String> processedChunks = parseProcessedChunksResponse(responseBody);
                         if (processedChunks.isEmpty() && (responseBody == null || responseBody.trim().isEmpty())) {
-                            System.out.println("[Worldmap] API returned empty response - no chunks processed yet");
+                            WorldmapLog.info("API returned empty response - no chunks processed yet");
                         } else {
-                            System.out.println("[Worldmap] Successfully fetched " + processedChunks.size()
-                                    + " processed chunks from API");
+                            WorldmapLog.info("Successfully fetched %d processed chunks from API", processedChunks.size());
                         }
                         return processedChunks;
+                    } else if (statusCode == 401 || statusCode == 403) {
+                        WorldmapLog.severe("API returned %d when fetching processed chunks list. Invalid or missing API key. Halting.", statusCode);
+                        return new HashSet<>();
                     } else {
-                        System.err.println("[Worldmap] API returned error status " + statusCode
-                                + " when fetching processed chunks list from " + apiUrl);
+                        WorldmapLog.severe("API returned error status %d when fetching processed chunks list from %s", statusCode, apiUrl);
                         if (responseBody != null && !responseBody.isEmpty()) {
                             String bodyPreview = responseBody.length() > 500
                                     ? responseBody.substring(0, 500) + "... (truncated)"
                                     : responseBody;
-                            System.err.println("[Worldmap] Error response body: " + bodyPreview);
+                            WorldmapLog.severe("Error response body: %s", bodyPreview);
                         } else {
-                            System.err.println("[Worldmap] Error response body: (empty)");
+                            WorldmapLog.severe("Error response body: (empty)");
                         }
                     }
                 } catch (IOException e) {
@@ -353,14 +356,14 @@ public class ChunkService {
                         errorMsg = e.getClass().getSimpleName() + " (no message)";
                     }
                     if (debugMode || attempt == maxRetries - 1) {
-                        System.err.println("[Worldmap] IO error fetching processed chunks list: " + errorMsg);
+                        WorldmapLog.severe("IO error fetching processed chunks list: %s", errorMsg);
                         if (debugMode) {
-                            e.printStackTrace();
+                            WorldmapLog.severe("IO error", e);
                         }
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    System.err.println("[Worldmap] Request interrupted while fetching processed chunks list");
+                    WorldmapLog.severe("Request interrupted while fetching processed chunks list");
                     return new HashSet<>();
                 } catch (Exception e) {
                     String errorMsg = e.getMessage();
@@ -368,9 +371,9 @@ public class ChunkService {
                         errorMsg = e.getClass().getSimpleName() + " (no message)";
                     }
                     if (debugMode || attempt == maxRetries - 1) {
-                        System.err.println("[Worldmap] Unexpected error fetching processed chunks list: " + errorMsg);
+                        WorldmapLog.severe("Unexpected error fetching processed chunks list: %s", errorMsg);
                         if (debugMode) {
-                            e.printStackTrace();
+                            WorldmapLog.severe("Unexpected error", e);
                         }
                     }
                 }
@@ -379,8 +382,7 @@ public class ChunkService {
                 if (attempt < maxRetries) {
                     // Exponential backoff
                     long delayMs = (long) Math.pow(2, attempt - 1) * 1000;
-                    System.out.println("[Worldmap] Retrying fetch processed chunks list in " + delayMs
-                            + "ms (attempt " + (attempt + 1) + "/" + maxRetries + ")");
+                    WorldmapLog.info("Retrying fetch processed chunks list in %dms (attempt %d/%d)", delayMs, attempt + 1, maxRetries);
                     try {
                         Thread.sleep(delayMs);
                     } catch (InterruptedException e) {
@@ -388,8 +390,7 @@ public class ChunkService {
                         return new HashSet<>();
                     }
                 } else {
-                    System.err.println("[Worldmap] Failed to fetch processed chunks list after " + maxRetries
-                            + " attempts");
+                    WorldmapLog.severe("Failed to fetch processed chunks list after %d attempts", maxRetries);
                 }
             }
 
@@ -424,7 +425,7 @@ public class ChunkService {
 
             if (jsonElement == null) {
                 if (debugMode) {
-                    System.err.println("[Worldmap] Response body parsed to null");
+                    WorldmapLog.fine("Response body parsed to null");
                 }
                 return processedChunks;
             }
@@ -442,7 +443,7 @@ public class ChunkService {
                 } else if (jsonObject.size() == 0) {
                     // Empty object - no chunks processed yet
                     if (debugMode) {
-                        System.out.println("[Worldmap] Received empty response object - no chunks processed yet");
+                        WorldmapLog.info("Received empty response object - no chunks processed yet");
                     }
                     return processedChunks;
                 }
@@ -453,18 +454,16 @@ public class ChunkService {
             }
 
             if (chunksArray == null) {
-                System.err.println("[Worldmap] Unexpected response format for processed chunks list");
-                System.err.println("[Worldmap] Response type: "
-                        + (jsonElement != null ? jsonElement.getClass().getSimpleName() : "null"));
+                WorldmapLog.severe("Unexpected response format for processed chunks list");
+                WorldmapLog.severe("Response type: %s", jsonElement != null ? jsonElement.getClass().getSimpleName() : "null");
                 if (jsonElement != null && jsonElement.isJsonObject()) {
                     JsonObject jsonObject = jsonElement.getAsJsonObject();
-                    System.err.println("[Worldmap] Response keys: " + jsonObject.keySet());
+                    WorldmapLog.severe("Response keys: %s", jsonObject.keySet());
                 }
                 if (responseBody != null && responseBody.length() < 1000) {
-                    System.err.println("[Worldmap] Response body: " + responseBody);
+                    WorldmapLog.severe("Response body: %s", responseBody);
                 } else if (responseBody != null) {
-                    System.err.println("[Worldmap] Response body (first 500 chars): "
-                            + responseBody.substring(0, Math.min(500, responseBody.length())));
+                    WorldmapLog.severe("Response body (first 500 chars): %s", responseBody.substring(0, Math.min(500, responseBody.length())));
                 }
                 return processedChunks;
             }
@@ -489,9 +488,9 @@ public class ChunkService {
             }
 
         } catch (Exception e) {
-            System.err.println("[Worldmap] Error parsing processed chunks response: " + e.getMessage());
+            WorldmapLog.severe("Error parsing processed chunks response: %s", e.getMessage());
             if (debugMode) {
-                e.printStackTrace();
+                WorldmapLog.severe("Parse error", e);
             }
         }
 
@@ -570,8 +569,7 @@ public class ChunkService {
             }
         } catch (Exception e) {
             if (debugMode) {
-                System.err.println("[Worldmap] Error parsing response body for ASSET_MAP_MISSING check: "
-                        + e.getMessage());
+                WorldmapLog.fine("Error parsing response body for ASSET_MAP_MISSING check: %s", e.getMessage());
             }
         }
 

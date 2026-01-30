@@ -7,6 +7,7 @@ import com.suiramdev.worldmap.models.ChunkPayload;
 import com.suiramdev.worldmap.models.ChunkSendResult;
 import com.suiramdev.worldmap.services.AssetService;
 import com.suiramdev.worldmap.services.ChunkService;
+import com.suiramdev.worldmap.util.WorldmapLog;
 
 import java.util.HashSet;
 import java.util.Set;
@@ -14,7 +15,9 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Manager for processing chunks and managing concurrent requests.
@@ -29,6 +32,13 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public class ChunkManager {
 
+    /** Processing is running (sending chunks). */
+    public static final String STATE_RUNNING = "running";
+    /** Processing halted by user (Stop button). */
+    public static final String STATE_HALTED_USER = "halted_user";
+    /** Processing halted due to missing or invalid API key. */
+    public static final String STATE_HALTED_AUTH = "halted_auth";
+
     private final ChunkService chunkService;
     private final AssetService assetService;
     private final AssetManager assetManager;
@@ -36,6 +46,13 @@ public class ChunkManager {
     private final ExecutorService executorService;
     private final AtomicInteger processedCount = new AtomicInteger(0);
     private final AtomicInteger failedCount = new AtomicInteger(0);
+
+    /** When true, processing is allowed; when false, all send/work is skipped until started again. */
+    private final AtomicBoolean processingEnabled = new AtomicBoolean(true);
+    /** Current state for UI: STATE_RUNNING, STATE_HALTED_USER, or STATE_HALTED_AUTH. */
+    private final AtomicReference<String> processingState = new AtomicReference<>(STATE_RUNNING);
+    /** Last error message for UI (e.g. auth error). */
+    private final AtomicReference<String> lastErrorMessage = new AtomicReference<>(null);
 
     // Processed chunks from API (set on initialization)
     private Set<String> processedChunksFromApi = new HashSet<>();
@@ -59,7 +76,7 @@ public class ChunkManager {
 
     /**
      * Processes a single chunk asynchronously.
-     * 
+     *
      * @param chunkX Chunk X coordinate
      * @param chunkZ Chunk Z coordinate
      * @param chunk  The chunk object
@@ -68,11 +85,29 @@ public class ChunkManager {
      *         failure
      */
     public CompletableFuture<Boolean> processChunk(int chunkX, int chunkZ, Object chunk, World world) {
-        // Note: Chunk processing status is now tracked via API, not local storage
-        // The check for already-processed chunks is done in Main.java using the API
-        // list
+        return processChunk(chunkX, chunkZ, chunk, world, false);
+    }
+
+    /**
+     * Processes a single chunk asynchronously.
+     *
+     * @param chunkX Chunk X coordinate
+     * @param chunkZ Chunk Z coordinate
+     * @param chunk  The chunk object
+     * @param world  The world object (for accessing neighboring chunks)
+     * @param force  If true, process even when processing is halted (e.g. for manual re-send)
+     * @return CompletableFuture that completes with true on success, false on
+     *         failure
+     */
+    public CompletableFuture<Boolean> processChunk(int chunkX, int chunkZ, Object chunk, World world, boolean force) {
+        if (!force && !processingEnabled.get()) {
+            return CompletableFuture.completedFuture(false);
+        }
 
         return CompletableFuture.supplyAsync(() -> {
+            if (!force && !processingEnabled.get()) {
+                return false;
+            }
             try {
                 // Extract chunk data with halo padding
                 ChunkPayload payload = extractChunkPayload(chunk, chunkX, chunkZ, world);
@@ -80,47 +115,42 @@ public class ChunkManager {
                 // Send to API (world derived from API key)
                 ChunkSendResult result = chunkService.sendChunkData(payload).join();
 
+                if (result.isAuthFailure()) {
+                    processingEnabled.set(false);
+                    processingState.set(STATE_HALTED_AUTH);
+                    lastErrorMessage.set("Invalid or missing API key. Use /worldmap key <key> then /worldmap start.");
+                    WorldmapLog.severe("Chunk processing halted due to auth failure.");
+                    return false;
+                }
+
                 // Handle the result
                 if (result.isSuccess()) {
-                    // Don't mark as processed in local storage - API tracks this
                     int count = processedCount.incrementAndGet();
-
-                    // Log progress every 100 chunks
                     if (count % 100 == 0) {
-                        System.out.println("[Worldmap] Processed " + count + " chunks (failed: "
-                                + failedCount.get() + ")");
+                        WorldmapLog.info("Processed %d chunks (failed: %d)", count, failedCount.get());
                     }
-
                     return true;
                 } else if (result.isAssetMapNeeded()) {
-                    // Asset-map is needed - send it and retry
-                    System.out.println("[Worldmap] Asset-map required for chunk (" + chunkX + "," + chunkZ
-                            + "). Sending asset-map and retrying...");
+                    WorldmapLog.info("Asset-map required for chunk (%d,%d). Sending asset-map and retrying...", chunkX, chunkZ);
 
                     if (sendAssetMapAndRetry(payload)) {
                         int count = processedCount.incrementAndGet();
-
-                        // Log progress every 100 chunks
                         if (count % 100 == 0) {
-                            System.out.println("[Worldmap] Processed " + count + " chunks (failed: "
-                                    + failedCount.get() + ")");
+                            WorldmapLog.info("Processed %d chunks (failed: %d)", count, failedCount.get());
                         }
-
                         return true;
                     } else {
                         failedCount.incrementAndGet();
                         return false;
                     }
                 } else {
-                    // Regular failure
                     failedCount.incrementAndGet();
                     return false;
                 }
             } catch (Exception e) {
-                System.err.println(
-                        "[Worldmap] Error processing chunk (" + chunkX + "," + chunkZ + "): " + e.getMessage());
+                WorldmapLog.severe("Error processing chunk (%d,%d): %s", chunkX, chunkZ, e.getMessage());
                 if (debugMode) {
-                    e.printStackTrace();
+                    WorldmapLog.severe("Error processing chunk", e);
                 }
                 failedCount.incrementAndGet();
                 return false;
@@ -139,29 +169,34 @@ public class ChunkManager {
             // Gather asset map
             var assetMap = assetManager.gatherAssetMap();
             if (assetMap == null || assetMap.isEmpty()) {
-                System.err.println("[Worldmap] No asset map data gathered");
+                WorldmapLog.severe("No asset map data gathered");
                 return false;
             }
 
-            System.out.println("[Worldmap] Sending asset-map (" + assetMap.size() + " entries)");
+            WorldmapLog.info("Sending asset-map (%d entries)", assetMap.size());
 
             // Send asset-map (world derived from API key)
             boolean assetMapSent = assetService.sendAssetMap(assetMap).join();
             if (!assetMapSent) {
-                System.err.println("[Worldmap] Failed to send asset-map");
+                WorldmapLog.severe("Failed to send asset-map");
                 return false;
             }
 
-            System.out.println("[Worldmap] Asset-map sent successfully, retrying chunk (" + payload.chunkX + ","
-                    + payload.chunkZ + ")");
+            WorldmapLog.info("Asset-map sent successfully, retrying chunk (%d,%d)", payload.chunkX, payload.chunkZ);
 
             // Retry sending the chunk
             ChunkSendResult retryResult = chunkService.sendChunkData(payload).join();
+            if (retryResult.isAuthFailure()) {
+                processingEnabled.set(false);
+                processingState.set(STATE_HALTED_AUTH);
+                lastErrorMessage.set("Invalid or missing API key. Use /worldmap key <key> then /worldmap start.");
+                return false;
+            }
             return retryResult.isSuccess();
         } catch (Exception e) {
-            System.err.println("[Worldmap] Error sending asset-map and retrying chunk: " + e.getMessage());
+            WorldmapLog.severe("Error sending asset-map and retrying chunk: %s", e.getMessage());
             if (debugMode) {
-                e.printStackTrace();
+                WorldmapLog.severe("Error sending asset-map and retrying", e);
             }
             return false;
         }
@@ -242,8 +277,7 @@ public class ChunkManager {
                     } catch (Exception e) {
                         // On error, use default tint (0)
                         if (debugMode) {
-                            System.err.println(
-                                    "[Worldmap] Error getting tint at (" + x + "," + z + "): " + e.getMessage());
+                            WorldmapLog.fine("Error getting tint at (%d,%d): %s", x, z, e.getMessage());
                         }
                         tintMap[x][z] = 0;
                     }
@@ -254,10 +288,9 @@ public class ChunkManager {
             payload.buildFromBlocks(mainBlocks, haloBlocks, minY, maxY, tintMap);
 
         } catch (Exception e) {
-            System.err.println(
-                    "[Worldmap] Error extracting chunk payload for (" + chunkX + "," + chunkZ + "): " + e.getMessage());
+            WorldmapLog.severe("Error extracting chunk payload for (%d,%d): %s", chunkX, chunkZ, e.getMessage());
             if (debugMode) {
-                e.printStackTrace();
+                WorldmapLog.severe("Error extracting chunk payload", e);
             }
             // Return minimal payload on error
             int[][][] emptyMain = new int[ChunkPayload.CHUNK_SIZE_X][ChunkPayload.CHUNK_SIZE_Y][ChunkPayload.CHUNK_SIZE_Z];
@@ -339,8 +372,7 @@ public class ChunkManager {
                     } catch (Exception e) {
                         // On error, fill with air (0)
                         if (debugMode && y == minY) { // Log once per position
-                            System.err.println("[Worldmap] Error getting block at world (" + worldX + "," + y + ","
-                                    + worldZ + "): " + e.getMessage());
+                            WorldmapLog.fine("Error getting block at world (%d,%d,%d): %s", worldX, y, worldZ, e.getMessage());
                         }
                         haloBlocks[haloX][y][haloZ] = 0;
                     }
@@ -368,11 +400,34 @@ public class ChunkManager {
      * @param chunkZ Chunk Z coordinate
      */
     public void scheduleChunkResend(World world, int chunkX, int chunkZ) {
+        if (!processingEnabled.get()) {
+            return;
+        }
+        long chunkIndex = ChunkUtil.indexChunk(chunkX, chunkZ);
+        world.getNonTickingChunkAsync(chunkIndex)
+                .thenAcceptAsync(chunk -> {
+                    if (chunk != null && processingEnabled.get()) {
+                        processChunk(chunkX, chunkZ, chunk, world);
+                    }
+                }, executorService);
+    }
+
+    /**
+     * Force re-process, render, and send a single chunk to the API.
+     * Loads the chunk asynchronously and sends it regardless of processed set or
+     * processing enabled state. Use for manual re-send of a given chunk (e.g.
+     * /worldmap reprocess chunkX chunkZ).
+     *
+     * @param world  The world
+     * @param chunkX Chunk X coordinate
+     * @param chunkZ Chunk Z coordinate
+     */
+    public void forceReprocessChunk(World world, int chunkX, int chunkZ) {
         long chunkIndex = ChunkUtil.indexChunk(chunkX, chunkZ);
         world.getNonTickingChunkAsync(chunkIndex)
                 .thenAcceptAsync(chunk -> {
                     if (chunk != null) {
-                        processChunk(chunkX, chunkZ, chunk, world);
+                        processChunk(chunkX, chunkZ, chunk, world, true);
                     }
                 }, executorService);
     }
@@ -388,8 +443,11 @@ public class ChunkManager {
      * @param world  The world
      */
     public void processChunkAsyncIfNeeded(int chunkX, int chunkZ, WorldChunk chunk, World world) {
+        if (!processingEnabled.get()) {
+            return;
+        }
         executorService.execute(() -> {
-            if (!isChunkProcessed(chunkX, chunkZ)) {
+            if (processingEnabled.get() && !isChunkProcessed(chunkX, chunkZ)) {
                 processChunk(chunkX, chunkZ, chunk, world);
             }
         });
@@ -421,15 +479,14 @@ public class ChunkManager {
                     synchronized (this) {
                         processedChunksFromApi = chunks;
                     }
-                    System.out.println("[Worldmap] Loaded " + chunks.size()
-                            + " processed chunks from API. Missing chunks will be sent.");
+                    WorldmapLog.info("Loaded %d processed chunks from API. Missing chunks will be sent.", chunks.size());
                 })
                 .exceptionally(throwable -> {
-                    System.err.println("[Worldmap] Failed to fetch processed chunks list: " + throwable.getMessage());
+                    WorldmapLog.severe("Failed to fetch processed chunks list: %s", throwable.getMessage());
                     if (debugMode) {
-                        throwable.printStackTrace();
+                        WorldmapLog.severe("Failed to fetch processed chunks list", throwable);
                     }
-                    System.out.println("[Worldmap] Will process all chunks (API fetch failed)");
+                    WorldmapLog.info("Will process all chunks (API fetch failed)");
                     return null;
                 });
     }
@@ -449,8 +506,59 @@ public class ChunkManager {
     }
 
     /**
+     * Stops chunk processing (user-requested halt). No further chunks are sent until {@link #startProcessing()} is called.
+     */
+    public void stopProcessing() {
+        processingEnabled.set(false);
+        processingState.set(STATE_HALTED_USER);
+        lastErrorMessage.set("Stopped by user.");
+        WorldmapLog.info("Chunk processing stopped by user.");
+    }
+
+    /**
+     * Enables chunk processing again. Does not automatically re-queue chunks; the caller (e.g. Main) should call processAllChunks() if a full run is desired.
+     */
+    public void startProcessing() {
+        processingEnabled.set(true);
+        processingState.set(STATE_RUNNING);
+        lastErrorMessage.set(null);
+        WorldmapLog.info("Chunk processing started.");
+    }
+
+    /**
+     * Halts processing due to auth/config error (e.g. missing API key at startup). Call instead of stopProcessing() when the cause is auth, not user request.
+     */
+    public void haltDueToAuth(String message) {
+        processingEnabled.set(false);
+        processingState.set(STATE_HALTED_AUTH);
+        lastErrorMessage.set(message != null ? message : "Invalid or missing API key.");
+        WorldmapLog.info("Chunk processing halted: %s", message != null ? message : "invalid or missing API key.");
+    }
+
+    /**
+     * Returns whether chunk processing is currently enabled (not halted).
+     */
+    public boolean isProcessingEnabled() {
+        return processingEnabled.get();
+    }
+
+    /**
+     * Current processing state for UI: {@link #STATE_RUNNING}, {@link #STATE_HALTED_USER}, or {@link #STATE_HALTED_AUTH}.
+     */
+    public String getProcessingState() {
+        return processingState.get();
+    }
+
+    /**
+     * Last error message for UI (e.g. auth error), or null if none.
+     */
+    public String getLastErrorMessage() {
+        return lastErrorMessage.get();
+    }
+
+    /**
      * Shuts down the executor service gracefully.
-     * 
+     *
      * <p>
      * Waits for ongoing tasks to complete, with a timeout of 60 seconds.
      * </p>

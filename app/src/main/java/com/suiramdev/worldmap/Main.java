@@ -24,6 +24,7 @@ import com.hypixel.hytale.server.core.universe.world.storage.IChunkLoader;
 import com.suiramdev.worldmap.config.PluginConfig;
 import com.suiramdev.worldmap.managers.AssetManager;
 import com.suiramdev.worldmap.managers.ChunkManager;
+import com.suiramdev.worldmap.util.WorldmapLog;
 import com.suiramdev.worldmap.services.AssetService;
 import com.suiramdev.worldmap.services.ChunkService;
 import it.unimi.dsi.fastutil.longs.LongSet;
@@ -72,15 +73,16 @@ public class Main extends JavaPlugin {
     @Override
     protected void setup() {
         instance = this;
-        System.out.println("[Worldmap] Plugin setup complete!");
+        getCommandRegistry().registerCommand(new com.suiramdev.worldmap.commands.WorldmapCommand());
+        WorldmapLog.info("Plugin setup complete!");
     }
 
     @Override
     protected void start() {
-        System.out.println("[Worldmap] Enabling plugin...");
+        WorldmapLog.info("Enabling plugin...");
 
         try {
-            System.out.println("[Worldmap] Configuration loaded - API Base URL: " + config.get().getApiBaseUrl());
+            WorldmapLog.info("Configuration loaded - API Base URL: %s", config.get().getApiBaseUrl());
 
             // Initialize services
             initializeServices();
@@ -88,16 +90,22 @@ public class Main extends JavaPlugin {
             // Initialize managers
             initializeManagers();
 
-            // Fetch processed chunks list from API first (wait for it; world derived from
-            // API key)
-            System.out.println("[Worldmap] Fetching processed chunks list from API...");
-            chunkManager.fetchProcessedChunksList().join();
+            // If API key is missing, do not start processing; set it via /worldmap key
+            String apiKey = config.get().getApiKey();
+            if (apiKey == null || apiKey.trim().isEmpty()) {
+                chunkManager.haltDueToAuth("API key not set. Use /worldmap key <key> to set the API key, then /worldmap start.");
+                WorldmapLog.info("API key is not set. Chunk processing halted. Use /worldmap key <key>, then /worldmap start.");
+            } else {
+                // Fetch processed chunks list from API first (wait for it; world derived from API key)
+                WorldmapLog.info("Fetching processed chunks list from API...");
+                chunkManager.fetchProcessedChunksList().join();
 
-            // Send asset map on startup
-            sendAssetMapOnStartup();
+                // Send asset map on startup
+                sendAssetMapOnStartup();
 
-            // Process chunks asynchronously (will use API list)
-            processAllChunks();
+                // Process chunks asynchronously (will use API list)
+                processAllChunks();
+            }
 
             // Register for block place/break/damage to re-send modified chunks
             registerBlockEventSystems();
@@ -106,8 +114,7 @@ public class Main extends JavaPlugin {
             registerChunkLoadEvent();
 
         } catch (Exception e) {
-            System.err.println("[Worldmap] ERROR: Failed to initialize plugin: " + e.getMessage());
-            e.printStackTrace();
+            WorldmapLog.severe("Failed to initialize plugin: " + e.getMessage(), e);
         }
     }
 
@@ -120,7 +127,7 @@ public class Main extends JavaPlugin {
         getEntityStoreRegistry().registerSystem(new WorldmapPlaceBlockEventSystem());
         getEntityStoreRegistry().registerSystem(new WorldmapBreakBlockEventSystem());
         getEntityStoreRegistry().registerSystem(new WorldmapDamageBlockEventSystem());
-        System.out.println("[Worldmap] Registered block event systems (place/break/damage)");
+        WorldmapLog.info("Registered block event systems (place/break/damage)");
     }
 
     /**
@@ -129,7 +136,7 @@ public class Main extends JavaPlugin {
      */
     private void registerChunkLoadEvent() {
         getEventRegistry().registerGlobal(ChunkPreLoadProcessEvent.class, this::onChunkPreLoadProcess);
-        System.out.println("[Worldmap] Registered chunk load event (new chunks will be sent)");
+        WorldmapLog.info("Registered chunk load event (new chunks will be sent)");
     }
 
     private void onChunkPreLoadProcess(ChunkPreLoadProcessEvent event) {
@@ -147,15 +154,15 @@ public class Main extends JavaPlugin {
 
     @Override
     protected void shutdown() {
-        System.out.println("[Worldmap] Disabling plugin...");
+        WorldmapLog.info("Disabling plugin...");
 
         // Shutdown chunk manager (waits for ongoing tasks)
         if (chunkManager != null) {
-            System.out.println("[Worldmap] Shutting down chunk manager...");
+            WorldmapLog.info("Shutting down chunk manager...");
             chunkManager.shutdown();
         }
 
-        System.out.println("[Worldmap] Plugin disabled successfully!");
+        WorldmapLog.info("Plugin disabled successfully!");
     }
 
     /**
@@ -202,38 +209,35 @@ public class Main extends JavaPlugin {
     private void sendAssetMapOnStartup() {
         CompletableFuture.runAsync(() -> {
             try {
-                System.out.println("[Worldmap] Sending asset-map to API");
+                WorldmapLog.info("Sending asset-map to API");
 
                 // Gather asset map with retries (BlockType registry may not be ready
                 // immediately)
                 var assetMap = gatherAssetMapWithRetry();
 
                 if (assetMap == null || assetMap.isEmpty()) {
-                    System.err.println("[Worldmap] WARNING: No asset map data gathered after retries. " +
+                    WorldmapLog.warn("No asset map data gathered after retries. " +
                             "BlockType registry may not be available yet. Asset-map will be sent when needed.");
                     return;
                 }
 
-                System.out.println("[Worldmap] Gathered " + assetMap.size() + " block entries for asset map");
+                WorldmapLog.info("Gathered %d block entries for asset map", assetMap.size());
 
                 // Send to API (world derived from API key)
                 assetService.sendAssetMap(assetMap)
                         .thenAccept(success -> {
                             if (success) {
-                                System.out.println("[Worldmap] Asset-map sent successfully");
+                                WorldmapLog.info("Asset-map sent successfully");
                             } else {
-                                System.err
-                                        .println("[Worldmap] WARNING: Failed to send asset-map");
+                                WorldmapLog.warn("Failed to send asset-map");
                             }
                         })
                         .exceptionally(throwable -> {
-                            System.err.println("[Worldmap] ERROR: Error sending asset-map: " + throwable.getMessage());
-                            throwable.printStackTrace();
+                            WorldmapLog.severe("Error sending asset-map: " + throwable.getMessage(), throwable);
                             return null;
                         });
             } catch (Exception e) {
-                System.err.println("[Worldmap] ERROR: Error getting world for asset-map: " + e.getMessage());
-                e.printStackTrace();
+                WorldmapLog.severe("Error getting world for asset-map: " + e.getMessage(), e);
             }
         });
     }
@@ -253,26 +257,26 @@ public class Main extends JavaPlugin {
 
             if (assetMap != null && !assetMap.isEmpty()) {
                 if (attempt > 0) {
-                    System.out.println("[Worldmap] Successfully gathered asset map on attempt " + (attempt + 1));
+                    WorldmapLog.info("Successfully gathered asset map on attempt %d", attempt + 1);
                 }
                 return assetMap;
             }
 
             if (attempt < maxRetries - 1) {
-                System.out.println("[Worldmap] Asset map not available yet, retrying in " + delayMs + "ms (attempt "
-                        + (attempt + 2) + "/" + maxRetries + ")");
+                WorldmapLog.info("Asset map not available yet, retrying in %dms (attempt %d/%d)",
+                        delayMs, attempt + 2, maxRetries);
                 try {
                     Thread.sleep(delayMs);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    System.err.println("[Worldmap] Interrupted while waiting for asset map");
+                    WorldmapLog.severe("Interrupted while waiting for asset map");
                     return new java.util.ArrayList<>();
                 }
                 delayMs *= 2; // Exponential backoff
             }
         }
 
-        System.err.println("[Worldmap] Failed to gather asset map after " + maxRetries + " attempts");
+        WorldmapLog.severe("Failed to gather asset map after %d attempts", maxRetries);
         return new java.util.ArrayList<>();
     }
 
@@ -284,32 +288,38 @@ public class Main extends JavaPlugin {
         CompletableFuture.runAsync(() -> {
             try {
                 processAllChunks();
-                System.out.println("[Worldmap] Chunk processing queued!");
-                System.out.println("[Worldmap] Chunks will be processed in the background");
+                WorldmapLog.info("Chunk processing queued!");
+                WorldmapLog.info("Chunks will be processed in the background");
             } catch (Exception e) {
-                System.err.println("[Worldmap] ERROR: Error during chunk processing: " + e.getMessage());
-                e.printStackTrace();
+                WorldmapLog.severe("Error during chunk processing: " + e.getMessage(), e);
             }
         });
+    }
+
+    /**
+     * Public entry point for (re)starting chunk processing (e.g. from /worldmap start).
+     */
+    public void processAllChunksPublic() {
+        processAllChunks();
     }
 
     /**
      * Processes all chunks from the world.
      */
     private void processAllChunks() {
-        System.out.println("[Worldmap] Starting chunk processing...");
+        WorldmapLog.info("Starting chunk processing...");
 
         try {
             // Get the default world from Universe
             Universe universe = Universe.get();
             if (universe == null) {
-                System.err.println("[Worldmap] ERROR: Universe is not available");
+                WorldmapLog.severe("Universe is not available");
                 return;
             }
 
             World world = universe.getDefaultWorld();
             if (world == null) {
-                System.err.println("[Worldmap] ERROR: Default world is not available");
+                WorldmapLog.severe("Default world is not available");
                 return;
             }
 
@@ -328,7 +338,7 @@ public class Main extends JavaPlugin {
                     Thread.sleep(500); // Wait 500ms before retrying
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    System.err.println("[Worldmap] ERROR: Interrupted while waiting for chunk loader");
+                    WorldmapLog.severe("Interrupted while waiting for chunk loader");
                     return;
                 }
             }
@@ -338,27 +348,25 @@ public class Main extends JavaPlugin {
                 // Get all chunk indexes from disk via the loader
                 try {
                     chunkIndexes = loader.getIndexes();
-                    System.out.println("[Worldmap] Loaded chunk indexes from disk storage");
+                    WorldmapLog.info("Loaded chunk indexes from disk storage");
                 } catch (IOException e) {
-                    System.err.println("[Worldmap] ERROR: Error getting chunk indexes from loader: " + e.getMessage());
-                    e.printStackTrace();
+                    WorldmapLog.severe("Error getting chunk indexes from loader: " + e.getMessage(), e);
                     // Fallback to currently loaded chunks
                     chunkIndexes = chunkStore.getChunkIndexes();
-                    System.out.println("[Worldmap] Falling back to currently loaded chunks: " + chunkIndexes.size());
+                    WorldmapLog.info("Falling back to currently loaded chunks: %d", chunkIndexes.size());
                 }
             } else {
                 // Fallback to currently loaded chunks if loader is not available
-                System.out.println("[Worldmap] Chunk loader not available, using currently loaded chunks");
+                WorldmapLog.info("Chunk loader not available, using currently loaded chunks");
                 chunkIndexes = chunkStore.getChunkIndexes();
                 if (chunkIndexes.isEmpty()) {
-                    System.err.println(
-                            "[Worldmap] ERROR: No chunks are currently loaded. The loader may not be initialized yet.");
+                    WorldmapLog.severe("No chunks are currently loaded. The loader may not be initialized yet.");
                     return;
                 }
             }
 
             int totalChunks = chunkIndexes.size();
-            System.out.println("[Worldmap] Found " + totalChunks + " chunks to check");
+            WorldmapLog.info("Found %d chunks to check", totalChunks);
 
             // Process each chunk - only process chunks that haven't been sent to the API
             int queued = 0;
@@ -380,15 +388,13 @@ public class Main extends JavaPlugin {
                                 chunkManager.processChunk(chunkX, chunkZ, chunk, world);
                             } else {
                                 if (config.get().isDebugMode()) {
-                                    System.out.println("[Worldmap] [DEBUG] Chunk (" + chunkX + "," + chunkZ
-                                            + ") is null, skipping");
+                                    WorldmapLog.fine("Chunk (%d,%d) is null, skipping", chunkX, chunkZ);
                                 }
                             }
                         })
                         .exceptionally(throwable -> {
-                            System.err.println("[Worldmap] ERROR: Error loading chunk (" + chunkX + "," + chunkZ + "): "
-                                    + throwable.getMessage());
-                            throwable.printStackTrace();
+                            WorldmapLog.severe("Error loading chunk (" + chunkX + "," + chunkZ + "): "
+                                    + throwable.getMessage(), throwable);
                             return null;
                         });
 
@@ -396,16 +402,15 @@ public class Main extends JavaPlugin {
 
                 // Log progress every 100 chunks
                 if ((queued + skipped) % 100 == 0) {
-                    System.out.println("[Worldmap] Queued " + queued + " / " + totalChunks + " chunks for processing ("
-                            + skipped + " already processed)");
+                    WorldmapLog.info("Queued %d / %d chunks for processing (%d already processed)",
+                            queued, totalChunks, skipped);
                 }
             }
 
-            System.out.println("[Worldmap] Queued " + queued + " unprocessed chunks for processing ("
-                    + skipped + " chunks were already processed)");
+            WorldmapLog.info("Queued %d unprocessed chunks for processing (%d chunks were already processed)",
+                    queued, skipped);
         } catch (Exception e) {
-            System.err.println("[Worldmap] ERROR: Error getting world/chunks: " + e.getMessage());
-            e.printStackTrace();
+            WorldmapLog.severe("Error getting world/chunks: " + e.getMessage(), e);
         }
     }
 
@@ -438,11 +443,75 @@ public class Main extends JavaPlugin {
 
     /**
      * Gets the asset map service.
-     * 
+     *
      * @return The asset map service
      */
     public AssetService getAssetService() {
         return assetService;
+    }
+
+    /**
+     * Gets the plugin config wrapper (for saving). The inner config is mutable via getConfig() setters.
+     */
+    public Config<PluginConfig> getConfigHolder() {
+        return config;
+    }
+
+    /**
+     * Updates the API key in config, saves to disk, and updates services. Optionally restarts chunk processing.
+     *
+     * @param newApiKey The new API key
+     * @param restartProcessing If true, start chunk processing after updating (e.g. after /worldmap key <key> restart)
+     */
+    public void updateApiKeyAndSave(String newApiKey, boolean restartProcessing) {
+        config.get().setApiKey(newApiKey != null ? newApiKey.trim() : "");
+        config.save().join();
+        chunkService.setApiKey(config.get().getApiKey());
+        assetService.setApiKey(config.get().getApiKey());
+        if (restartProcessing) {
+            chunkManager.startProcessing();
+            chunkManager.fetchProcessedChunksList().thenRun(() -> {
+                World world = Universe.get() != null ? Universe.get().getDefaultWorld() : null;
+                if (world != null) {
+                    world.execute(this::processAllChunks);
+                } else {
+                    processAllChunks();
+                }
+            });
+        }
+    }
+
+    /**
+     * Saves the current plugin config to disk.
+     */
+    public void saveConfig() {
+        config.save().join();
+    }
+
+    /**
+     * Builds status text (state, API key, counts, last error, commands).
+     */
+    public String getAdminStatusText() {
+        if (chunkManager == null) {
+            return "Plugin not fully loaded.";
+        }
+        String state = chunkManager.getProcessingState();
+        int processed = chunkManager.getProcessedCount();
+        int failed = chunkManager.getFailedCount();
+        String lastError = chunkManager.getLastErrorMessage();
+        String apiKeyStatus = config.get().getApiKey() == null || config.get().getApiKey().trim().isEmpty()
+                ? "Not set"
+                : "Set (" + config.get().getApiKey().length() + " chars)";
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("State: ").append(state).append("\n");
+        sb.append("API key: ").append(apiKeyStatus).append("\n");
+        sb.append("Processed: ").append(processed).append(" | Failed: ").append(failed).append("\n");
+        if (lastError != null && !lastError.isEmpty()) {
+            sb.append("Last error: ").append(lastError).append("\n");
+        }
+        sb.append("\nCommands: /worldmap key <key> [restart] | start | stop | reprocess <chunkX> <chunkZ> | logs");
+        return sb.toString();
     }
 
     // --- Block event systems (ECS) - re-send chunk to API when blocks change ---

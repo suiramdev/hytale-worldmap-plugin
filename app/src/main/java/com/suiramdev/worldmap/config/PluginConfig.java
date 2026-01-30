@@ -67,4 +67,12 @@ public class PluginConfig {
     public boolean isDebugMode() {
         return debugMode;
     }
+
+    public void setApiUrl(String apiUrl) {
+        this.apiUrl = apiUrl != null ? apiUrl : "";
+    }
+
+    public void setApiKey(String apiKey) {
+        this.apiKey = apiKey != null ? apiKey : "";
+    }
 }

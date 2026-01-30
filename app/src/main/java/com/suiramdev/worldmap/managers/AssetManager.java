@@ -9,6 +9,7 @@ import com.hypixel.hytale.server.core.asset.type.blocktype.config.BlockType;
 import com.hypixel.hytale.server.core.asset.type.blocktype.config.BlockTypeTextures;
 import com.hypixel.hytale.server.core.asset.type.blocktype.config.CustomModelTexture;
 import com.suiramdev.worldmap.models.AssetMapPayload;
+import com.suiramdev.worldmap.util.WorldmapLog;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -53,7 +54,7 @@ public class AssetManager {
 
             if (blockTypeAssetMap == null) {
                 if (debugMode) {
-                    System.err.println("[Worldmap] BlockType.getAssetMap() returned null - registry may not be initialized yet");
+                    WorldmapLog.fine("BlockType.getAssetMap() returned null - registry may not be initialized yet");
                 }
                 return assetMap;
             }
@@ -63,12 +64,12 @@ public class AssetManager {
 
             if (blockTypeMap == null || blockTypeMap.isEmpty()) {
                 if (debugMode) {
-                    System.err.println("[Worldmap] BlockType asset map is empty - registry may not be initialized yet");
+                    WorldmapLog.fine("BlockType asset map is empty - registry may not be initialized yet");
                 }
                 return assetMap;
             }
 
-            System.out.println("[Worldmap] Found " + blockTypeMap.size() + " block types in registry");
+            WorldmapLog.info("Found %d block types in registry", blockTypeMap.size());
 
             // Extract asset map entry for each block type
             for (BlockType blockType : blockTypeMap.values()) {
@@ -81,7 +82,7 @@ public class AssetManager {
                     String blockTypeId = blockType.getId();
                     if (blockTypeId == null || blockTypeId.isEmpty()) {
                         if (debugMode) {
-                            System.err.println("[Worldmap] BlockType has null or empty ID, skipping");
+                            WorldmapLog.fine("BlockType has null or empty ID, skipping");
                         }
                         continue;
                     }
@@ -90,7 +91,7 @@ public class AssetManager {
                     if (blockId == Integer.MIN_VALUE) {
                         // Integer.MIN_VALUE is the NOT_FOUND constant in BlockTypeAssetMap
                         if (debugMode) {
-                            System.err.println("[Worldmap] Could not get index for block type: " + blockTypeId);
+                            WorldmapLog.fine("Could not get index for block type: %s", blockTypeId);
                         }
                         continue;
                     }
@@ -101,19 +102,19 @@ public class AssetManager {
                     }
                 } catch (Exception e) {
                     if (debugMode) {
-                        System.err.println("[Worldmap] Error extracting asset map entry for block type '" 
-                                + (blockType.getId() != null ? blockType.getId() : "unknown") + "': " + e.getMessage());
+                        WorldmapLog.fine("Error extracting asset map entry for block type '%s': %s",
+                                blockType.getId() != null ? blockType.getId() : "unknown", e.getMessage());
                     }
                 }
             }
 
             if (debugMode) {
-                System.out.println("[Worldmap] Successfully extracted " + assetMap.size() + " asset map entries");
+                WorldmapLog.info("Successfully extracted %d asset map entries", assetMap.size());
             }
         } catch (Exception e) {
-            System.err.println("[Worldmap] Error gathering asset map: " + e.getMessage());
+            WorldmapLog.severe("Error gathering asset map: %s", e.getMessage());
             if (debugMode) {
-                e.printStackTrace();
+                WorldmapLog.severe("Error gathering asset map", e);
             }
         }
 
@@ -153,8 +154,7 @@ public class AssetManager {
             return builder.build();
         } catch (Exception e) {
             if (debugMode) {
-                System.err.println(
-                        "[Worldmap] Error extracting asset map entry for blockId " + blockId + ": " + e.getMessage());
+                WorldmapLog.fine("Error extracting asset map entry for blockId %d: %s", blockId, e.getMessage());
             }
             // Return entry with defaults if extraction fails
             return builder.build();
@@ -208,7 +208,7 @@ public class AssetManager {
             }
         } catch (Exception e) {
             if (debugMode) {
-                System.err.println("[Worldmap] Error extracting textures: " + e.getMessage());
+                WorldmapLog.fine("Error extracting textures: %s", e.getMessage());
             }
             // Use defaults if extraction fails
         }
@@ -232,7 +232,7 @@ public class AssetManager {
             }
         } catch (Exception e) {
             if (debugMode) {
-                System.err.println("[Worldmap] Error extracting draw type: " + e.getMessage());
+                WorldmapLog.fine("Error extracting draw type: %s", e.getMessage());
             }
             // Use defaults if extraction fails
         }
@@ -250,7 +250,7 @@ public class AssetManager {
             }
         } catch (Exception e) {
             if (debugMode) {
-                System.err.println("[Worldmap] Error extracting opacity: " + e.getMessage());
+                WorldmapLog.fine("Error extracting opacity: %s", e.getMessage());
             }
             // Use default (Opacity.Solid) if extraction fails
         }
@@ -270,7 +270,7 @@ public class AssetManager {
             }
         } catch (Exception e) {
             if (debugMode) {
-                System.err.println("[Worldmap] Error extracting light emission: " + e.getMessage());
+                WorldmapLog.fine("Error extracting light emission: %s", e.getMessage());
             }
             // Use default (0) if extraction fails
         }
@@ -288,7 +288,7 @@ public class AssetManager {
             }
         } catch (Exception e) {
             if (debugMode) {
-                System.err.println("[Worldmap] Error extracting material: " + e.getMessage());
+                WorldmapLog.fine("Error extracting material: %s", e.getMessage());
             }
             // Use default (BlockMaterial.Solid) if extraction fails
         }
@@ -326,7 +326,7 @@ public class AssetManager {
             }
         } catch (Exception e) {
             if (debugMode) {
-                System.err.println("[Worldmap] Error extracting metadata: " + e.getMessage());
+                WorldmapLog.fine("Error extracting metadata: %s", e.getMessage());
             }
         }
     }

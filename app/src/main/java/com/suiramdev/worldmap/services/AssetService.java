@@ -5,6 +5,7 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.suiramdev.worldmap.models.AssetMapPayload;
+import com.suiramdev.worldmap.util.WorldmapLog;
 
 import java.io.IOException;
 import java.net.URI;
@@ -30,7 +31,7 @@ import java.util.concurrent.CompletableFuture;
 public class AssetService {
 
     private final String apiBaseUrl;
-    private final String apiKey;
+    private volatile String apiKey;
     private final int requestTimeout;
     private final int maxRetries;
     private final boolean debugMode;
@@ -64,6 +65,13 @@ public class AssetService {
     }
 
     /**
+     * Updates the API key (e.g. after /worldmap key). Takes effect on next request.
+     */
+    public void setApiKey(String apiKey) {
+        this.apiKey = apiKey != null ? apiKey.trim() : "";
+    }
+
+    /**
      * Sends asset map data to the API asynchronously.
      * World is derived from the API key (key is linked to a world).
      *
@@ -77,21 +85,20 @@ public class AssetService {
      */
     public CompletableFuture<Boolean> sendAssetMap(List<AssetMapPayload> assetMap) {
         if (assetMap == null || assetMap.isEmpty()) {
-            System.err.println("[Worldmap] No asset map data provided");
+            WorldmapLog.severe("No asset map data provided");
             return CompletableFuture.completedFuture(false);
         }
 
         return CompletableFuture.supplyAsync(() -> {
             try {
-                System.out.println(
-                        "[Worldmap] Sending " + assetMap.size() + " block entries for asset map");
+                WorldmapLog.info("Sending %d block entries for asset map", assetMap.size());
 
                 // Send to API endpoint
                 return sendAssetMapToApi(assetMap);
             } catch (Exception e) {
-                System.err.println("[Worldmap] Error sending asset map: " + e.getMessage());
+                WorldmapLog.severe("Error sending asset map: %s", e.getMessage());
                 if (debugMode) {
-                    e.printStackTrace();
+                    WorldmapLog.severe("Error sending asset map", e);
                 }
                 return false;
             }
@@ -123,8 +130,7 @@ public class AssetService {
         String jsonPayload = gson.toJson(blocksArray);
         int payloadSize = jsonPayload.length();
 
-        System.out.println("[Worldmap] Sending " + assetMap.size() + " asset map entries to " + apiUrl + " ("
-                + payloadSize + " bytes)");
+        WorldmapLog.info("Sending %d asset map entries to %s (%d bytes)", assetMap.size(), apiUrl, payloadSize);
 
         int attempt = 0;
         while (attempt < maxRetries) {
@@ -144,8 +150,7 @@ public class AssetService {
                 HttpRequest httpRequest = requestBuilder.build();
 
                 if (debugMode || attempt == 0) {
-                    System.out.println("[Worldmap] Sending asset map to " + apiUrl + " (attempt " + (attempt + 1) + "/"
-                            + maxRetries + ")");
+                    WorldmapLog.info("Sending asset map to %s (attempt %d/%d)", apiUrl, attempt + 1, maxRetries);
                 }
 
                 HttpResponse<String> response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
@@ -154,16 +159,15 @@ public class AssetService {
                 String responseBody = response.body();
 
                 if (statusCode >= 200 && statusCode < 300) {
-                    System.out.println("[Worldmap] Successfully sent asset map - Status: " + statusCode);
+                    WorldmapLog.info("Successfully sent asset map - Status: %d", statusCode);
                     return true;
                 } else {
-                    System.err.println(
-                            "[Worldmap] API returned error status " + statusCode + " for asset-map");
+                    WorldmapLog.severe("API returned error status %d for asset-map", statusCode);
                     if (responseBody != null && !responseBody.isEmpty()) {
                         String bodyPreview = responseBody.length() > 500
                                 ? responseBody.substring(0, 500) + "... (truncated)"
                                 : responseBody;
-                        System.err.println("[Worldmap] Error response body: " + bodyPreview);
+                        WorldmapLog.severe("Error response body: %s", bodyPreview);
                     }
                 }
             } catch (IOException e) {
@@ -172,15 +176,14 @@ public class AssetService {
                     errorMsg = e.getClass().getSimpleName() + " (no message)";
                 }
                 if (debugMode || attempt == maxRetries - 1) {
-                    System.err
-                            .println("[Worldmap] IO error sending asset map: " + errorMsg);
+                    WorldmapLog.severe("IO error sending asset map: %s", errorMsg);
                     if (debugMode) {
-                        e.printStackTrace();
+                        WorldmapLog.severe("IO error", e);
                     }
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                System.err.println("[Worldmap] Request interrupted for asset-map");
+                WorldmapLog.severe("Request interrupted for asset-map");
                 return false;
             } catch (Exception e) {
                 String errorMsg = e.getMessage();
@@ -188,10 +191,9 @@ public class AssetService {
                     errorMsg = e.getClass().getSimpleName() + " (no message)";
                 }
                 if (debugMode || attempt == maxRetries - 1) {
-                    System.err.println(
-                            "[Worldmap] Unexpected error sending asset map: " + errorMsg);
+                    WorldmapLog.severe("Unexpected error sending asset map: %s", errorMsg);
                     if (debugMode) {
-                        e.printStackTrace();
+                        WorldmapLog.severe("Unexpected error", e);
                     }
                 }
             }
@@ -200,8 +202,7 @@ public class AssetService {
             if (attempt < maxRetries) {
                 // Exponential backoff
                 long delayMs = (long) Math.pow(2, attempt - 1) * 1000;
-                System.out.println("[Worldmap] Retrying asset map send in " + delayMs
-                        + "ms (attempt " + (attempt + 1) + "/" + maxRetries + ")");
+                WorldmapLog.info("Retrying asset map send in %dms (attempt %d/%d)", delayMs, attempt + 1, maxRetries);
                 try {
                     Thread.sleep(delayMs);
                 } catch (InterruptedException e) {
@@ -209,7 +210,7 @@ public class AssetService {
                     return false;
                 }
             } else {
-                System.err.println("[Worldmap] Failed to send asset map after " + maxRetries + " attempts");
+                WorldmapLog.severe("Failed to send asset map after %d attempts", maxRetries);
             }
         }
 
@@ -224,7 +225,7 @@ public class AssetService {
      */
     private String buildAssetMapApiUrl() {
         if (apiBaseUrl == null || apiBaseUrl.isEmpty()) {
-            System.err.println("[Worldmap] API base URL is not configured");
+            WorldmapLog.severe("API base URL is not configured");
             return null;
         }
 
