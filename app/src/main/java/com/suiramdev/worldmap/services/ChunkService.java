@@ -118,7 +118,7 @@ public class ChunkService {
 
         // Missing or empty API key: do not retry; processing must be halted until user sets key
         if (apiKey == null || apiKey.isEmpty()) {
-            WorldmapLog.severe("API key is missing. Chunk processing halted. Use /worldmap key <key> then /worldmap start.");
+            WorldmapLog.severe("API key is missing. Chunk processing halted. Use /worldmap key set <key> then /worldmap process start.");
             return ChunkSendResult.authFailure();
         }
 
@@ -199,7 +199,7 @@ public class ChunkService {
                     WorldmapLog.info("Successfully sent chunk (%d,%d) - Status: %d", chunkX, chunkZ, statusCode);
                     return ChunkSendResult.success();
                 } else if (statusCode == 401 || statusCode == 403) {
-                    WorldmapLog.severe("API returned %d (unauthorized). Invalid or missing API key. Chunk processing halted. Use /worldmap key <key> then /worldmap start.", statusCode);
+                    WorldmapLog.severe("API returned %d (unauthorized). Invalid or missing API key. Chunk processing halted. Use /worldmap key set <key> then /worldmap process start.", statusCode);
                     return ChunkSendResult.authFailure();
                 } else if (statusCode == 428) {
                     // Check if this is ASSET_MAP_MISSING error

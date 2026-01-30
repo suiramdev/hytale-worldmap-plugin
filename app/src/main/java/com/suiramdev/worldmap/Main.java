@@ -93,8 +93,8 @@ public class Main extends JavaPlugin {
             // If API key is missing, do not start processing; set it via /worldmap key
             String apiKey = config.get().getApiKey();
             if (apiKey == null || apiKey.trim().isEmpty()) {
-                chunkManager.haltDueToAuth("API key not set. Use /worldmap key <key> to set the API key, then /worldmap start.");
-                WorldmapLog.info("API key is not set. Chunk processing halted. Use /worldmap key <key>, then /worldmap start.");
+                chunkManager.haltDueToAuth("API key not set. Use /worldmap key set <key> to set the API key, then /worldmap process start.");
+                WorldmapLog.info("API key is not set. Chunk processing halted. Use /worldmap key set <key>, then /worldmap process start.");
             } else {
                 // Fetch processed chunks list from API first (wait for it; world derived from API key)
                 WorldmapLog.info("Fetching processed chunks list from API...");
@@ -297,7 +297,7 @@ public class Main extends JavaPlugin {
     }
 
     /**
-     * Public entry point for (re)starting chunk processing (e.g. from /worldmap start).
+     * Public entry point for (re)starting chunk processing (e.g. from /worldmap process start).
      */
     public void processAllChunksPublic() {
         processAllChunks();
@@ -461,7 +461,7 @@ public class Main extends JavaPlugin {
      * Updates the API key in config, saves to disk, and updates services. Optionally restarts chunk processing.
      *
      * @param newApiKey The new API key
-     * @param restartProcessing If true, start chunk processing after updating (e.g. after /worldmap key <key> restart)
+     * @param restartProcessing If true, start chunk processing after updating (e.g. after /worldmap key set <key> restart)
      */
     public void updateApiKeyAndSave(String newApiKey, boolean restartProcessing) {
         config.get().setApiKey(newApiKey != null ? newApiKey.trim() : "");
@@ -510,7 +510,7 @@ public class Main extends JavaPlugin {
         if (lastError != null && !lastError.isEmpty()) {
             sb.append("Last error: ").append(lastError).append("\n");
         }
-        sb.append("\nCommands: /worldmap key <key> [restart] | start | stop | reprocess <chunkX> <chunkZ> | logs");
+        sb.append("\nCommands: /worldmap key get | key set <key> [restart] | process start | process stop | process force <chunkX> <chunkZ> | logs");
         return sb.toString();
     }
 

@@ -13,12 +13,13 @@ import com.suiramdev.worldmap.Main;
 import javax.annotation.Nonnull;
 
 /**
- * Starts chunk processing. Use after setting API key or after a manual stop.
+ * Shows whether the API key is set (and its length). Does not display the key.
+ * Usage: /worldmap key get
  */
-public class WorldmapStartCommand extends AbstractPlayerCommand {
+public class WorldmapKeyGetCommand extends AbstractPlayerCommand {
 
-    public WorldmapStartCommand() {
-        super("start", "Start Worldmap chunk processing.");
+    public WorldmapKeyGetCommand() {
+        super("get", "Show whether the Worldmap API key is set (length only).");
     }
 
     @Override
@@ -29,16 +30,10 @@ public class WorldmapStartCommand extends AbstractPlayerCommand {
             context.sendMessage(Message.raw("Worldmap plugin not loaded."));
             return;
         }
-        main.getChunkManager().startProcessing();
-        main.getChunkManager().fetchProcessedChunksList().thenRun(() -> {
-            // Call processAllChunks from Main - we need to do this on the main thread / world executor
-            world.execute(() -> {
-                Main m = Main.getInstance();
-                if (m != null) {
-                    m.processAllChunksPublic();
-                }
-            });
-        });
-        context.sendMessage(Message.raw("Chunk processing started."));
+        String apiKey = main.getConfig().getApiKey();
+        String status = (apiKey == null || apiKey.trim().isEmpty())
+                ? "Not set. Use /worldmap key set <key> to set it."
+                : "Set (" + apiKey.length() + " characters).";
+        context.sendMessage(Message.raw("API key: " + status));
     }
 }

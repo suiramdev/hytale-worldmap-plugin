@@ -17,15 +17,15 @@ import javax.annotation.Nonnull;
 
 /**
  * Force re-process, render, and send a single chunk to the API.
- * Usage: /worldmap reprocess &lt;chunkX&gt; &lt;chunkZ&gt;
+ * Usage: /worldmap process force &lt;chunkX&gt; &lt;chunkZ&gt;
  */
-public class WorldmapReprocessCommand extends AbstractPlayerCommand {
+public class WorldmapProcessForceCommand extends AbstractPlayerCommand {
 
     private final RequiredArg<Integer> chunkXArg = this.withRequiredArg("chunkX", "Chunk X coordinate", ArgTypes.INTEGER);
     private final RequiredArg<Integer> chunkZArg = this.withRequiredArg("chunkZ", "Chunk Z coordinate", ArgTypes.INTEGER);
 
-    public WorldmapReprocessCommand() {
-        super("reprocess", "Force re-process and send chunk (chunkX, chunkZ) to the API.");
+    public WorldmapProcessForceCommand() {
+        super("force", "Force re-process and send chunk (chunkX, chunkZ) to the API.");
     }
 
     @Override

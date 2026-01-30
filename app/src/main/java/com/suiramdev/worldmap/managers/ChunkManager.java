@@ -118,7 +118,7 @@ public class ChunkManager {
                 if (result.isAuthFailure()) {
                     processingEnabled.set(false);
                     processingState.set(STATE_HALTED_AUTH);
-                    lastErrorMessage.set("Invalid or missing API key. Use /worldmap key <key> then /worldmap start.");
+                    lastErrorMessage.set("Invalid or missing API key. Use /worldmap key set <key> then /worldmap process start.");
                     WorldmapLog.severe("Chunk processing halted due to auth failure.");
                     return false;
                 }
@@ -189,7 +189,7 @@ public class ChunkManager {
             if (retryResult.isAuthFailure()) {
                 processingEnabled.set(false);
                 processingState.set(STATE_HALTED_AUTH);
-                lastErrorMessage.set("Invalid or missing API key. Use /worldmap key <key> then /worldmap start.");
+                lastErrorMessage.set("Invalid or missing API key. Use /worldmap key set <key> then /worldmap process start.");
                 return false;
             }
             return retryResult.isSuccess();
@@ -416,7 +416,7 @@ public class ChunkManager {
      * Force re-process, render, and send a single chunk to the API.
      * Loads the chunk asynchronously and sends it regardless of processed set or
      * processing enabled state. Use for manual re-send of a given chunk (e.g.
-     * /worldmap reprocess chunkX chunkZ).
+     * /worldmap process force chunkX chunkZ).
      *
      * @param world  The world
      * @param chunkX Chunk X coordinate

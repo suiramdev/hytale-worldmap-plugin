@@ -17,7 +17,7 @@ import javax.annotation.Nonnull;
 
 /**
  * Sets the API key and optionally restarts chunk processing.
- * Usage: /worldmap key <key> [restart]
+ * Usage: /worldmap key set <key> [restart]
  */
 public class WorldmapSetKeyCommand extends AbstractPlayerCommand {
 
@@ -25,7 +25,7 @@ public class WorldmapSetKeyCommand extends AbstractPlayerCommand {
     private final OptionalArg<String> restartArg = this.withOptionalArg("restart", "Type 'restart' to start processing after save", ArgTypes.STRING);
 
     public WorldmapSetKeyCommand() {
-        super("key", "Set the Worldmap API key. Add 'restart' to start processing after save.");
+        super("set", "Set the Worldmap API key. Add 'restart' to start processing after save.");
     }
 
     @Override

@@ -13,12 +13,13 @@ import com.suiramdev.worldmap.Main;
 import javax.annotation.Nonnull;
 
 /**
- * Stops chunk processing. No further chunks are sent until /worldmap start is used.
+ * Starts chunk processing. Use after setting API key or after a manual stop.
+ * Usage: /worldmap process start
  */
-public class WorldmapStopCommand extends AbstractPlayerCommand {
+public class WorldmapProcessStartCommand extends AbstractPlayerCommand {
 
-    public WorldmapStopCommand() {
-        super("stop", "Stop Worldmap chunk processing.");
+    public WorldmapProcessStartCommand() {
+        super("start", "Start Worldmap chunk processing.");
     }
 
     @Override
@@ -29,7 +30,15 @@ public class WorldmapStopCommand extends AbstractPlayerCommand {
             context.sendMessage(Message.raw("Worldmap plugin not loaded."));
             return;
         }
-        main.getChunkManager().stopProcessing();
-        context.sendMessage(Message.raw("Chunk processing stopped."));
+        main.getChunkManager().startProcessing();
+        main.getChunkManager().fetchProcessedChunksList().thenRun(() -> {
+            world.execute(() -> {
+                Main m = Main.getInstance();
+                if (m != null) {
+                    m.processAllChunksPublic();
+                }
+            });
+        });
+        context.sendMessage(Message.raw("Chunk processing started."));
     }
 }
