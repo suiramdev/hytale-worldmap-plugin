@@ -1,0 +1,8 @@
+{
+  "apiUrl": "http://localhost:3000/api",
+  "apiKey": "",
+  "requestTimeout": 30000,
+  "maxRetries": 3,
+  "batchSize": 10,
+  "debugMode": false
+}

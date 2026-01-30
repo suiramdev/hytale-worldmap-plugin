@@ -1,63 +1,27 @@
 # Gradle
 .gradle/
 build/
-!gradle/wrapper/gradle-wrapper.jar
-!**/src/main/**/build/
-!**/src/test/**/build/
-.kotlin/
+app/build/
 
-# Server testing directory
-run/
-
-# IntelliJ IDEA
+# IDE
 .idea/
-*.iws
 *.iml
-*.ipr
-out/
-!**/src/main/**/out/
-!**/src/test/**/out/
-
-# Eclipse
-.apt_generated
-.classpath
-.factorypath
-.project
-.settings
-.springBeans
-.sts4-cache
-bin/
-!**/src/main/**/bin/
-!**/src/test/**/bin/
-
-# NetBeans
-/nbproject/private/
-/nbbuild/
-/dist/
-/nbdist/
-/.nb-gradle/
-
-# VS Code
 .vscode/
-
-# Mac OS
-.DS_Store
-
-# Windows
-Thumbs.db
-desktop.ini
-
-# Logs
-*.log
-
-# Temporary files
-*.tmp
-*.bak
 *.swp
-*~
+.classpath
+.project
+.settings/
 
-# Hytale server JAR
-libs/HytaleServer.jar
+# OS
+.DS_Store
+Thumbs.db
 
-# Generated files
-decompiled/
+# Hytale
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+.hytale-downloader-credentials.json
+
+# Setup
+.bin/
+server/
+src-ref/
