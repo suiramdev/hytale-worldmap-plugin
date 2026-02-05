@@ -50,6 +50,7 @@ public class AssetService {
     private final HttpClient httpClient;
     private final Gson gson;
     private final Gson gsonCanonical;
+    private volatile String lastSyncedAssetMapHash;
 
     /**
      * Creates a new AssetService instance.
@@ -88,45 +89,183 @@ public class AssetService {
     }
 
     /**
-     * Syncs asset map with the API using manifest-only content-addressed flow.
-     * Computes SHA-256 of the manifest (from BlockType.getAssetMap()), checks via
-     * POST /asset-map/check, then sends manifest + assetMapHash via POST
-     * /asset-map. Also uploads Assets.zip to POST /assets with assetMapHash,
-     * assetsHash, and assetMap.
+     * Returns the most recently synced asset map hash.
      *
-     * @param assetMap List of block configurations (manifest from BlockType
-     *                 registry)
-     * @return CompletableFuture that completes with true on success, false on
-     *         failure
+     * @return The last synced assetMapHash, or null if none
      */
-    public CompletableFuture<Boolean> syncAssetMap(List<AssetMapPayload> assetMap) {
+    public String getLastSyncedAssetMapHash() {
+        return lastSyncedAssetMapHash;
+    }
+
+    /**
+     * Updates the cached asset map hash (e.g. after server audit response).
+     *
+     * @param assetMapHash The asset map hash to store
+     */
+    public void updateSyncedAssetMapHash(String assetMapHash) {
+        if (assetMapHash != null && !assetMapHash.isEmpty()) {
+            this.lastSyncedAssetMapHash = assetMapHash;
+        }
+    }
+
+    /**
+     * Syncs asset map with the API using the content-addressable flow.
+     * Computes SHA-256 of the manifest (from BlockType.getAssetMap()), then
+     * sends manifest + assetMapHash via POST /asset-map.
+     *
+     * @param assetMap List of block configurations (manifest from BlockType registry)
+     * @return CompletableFuture that completes with the assetMapHash on success,
+     *         or null on failure
+     */
+    public CompletableFuture<String> syncAssetMap(List<AssetMapPayload> assetMap) {
         if (assetMap == null || assetMap.isEmpty()) {
             WorldmapLog.severe("No asset map data provided");
-            return CompletableFuture.completedFuture(false);
+            return CompletableFuture.completedFuture(null);
         }
 
         return CompletableFuture.supplyAsync(() -> {
             try {
                 String assetMapHash = computeManifestHash(assetMap);
                 if (assetMapHash == null) {
-                    return false;
+                    return null;
                 }
                 WorldmapLog.info("Syncing asset map (%d entries) with manifest hash %s", assetMap.size(), assetMapHash);
-                if (!checkAssetMapExists(assetMapHash)) {
-                    WorldmapLog.info("Asset map version not found on server");
-                }
                 boolean assetMapSent = sendAssetMapToApi(assetMap, assetMapHash);
                 if (!assetMapSent) {
-                    return false;
+                    return null;
                 }
-                return sendAssetsZipToApi(assetMap, assetMapHash);
+                lastSyncedAssetMapHash = assetMapHash;
+                return assetMapHash;
             } catch (Exception e) {
                 WorldmapLog.severe("Error syncing asset map: %s", e.getMessage());
                 if (debugMode) {
                     WorldmapLog.severe("Error syncing asset map", e);
                 }
+                return null;
+            }
+        });
+    }
+
+    /**
+     * Uploads only the missing asset slices to the API.
+     *
+     * @param assets       Resolved assets to upload
+     * @param assetMapHash The asset map hash to associate the assets with
+     * @return CompletableFuture that completes with true on success, false on failure
+     */
+    public CompletableFuture<Boolean> uploadAssetSlices(List<com.suiramdev.worldmap.models.ResolvedAsset> assets,
+                                                        String assetMapHash) {
+        if (assets == null || assets.isEmpty()) {
+            WorldmapLog.severe("No resolved assets provided for upload");
+            return CompletableFuture.completedFuture(false);
+        }
+        if (assetMapHash == null || assetMapHash.isEmpty()) {
+            WorldmapLog.severe("Asset map hash is required for asset slice upload");
+            return CompletableFuture.completedFuture(false);
+        }
+
+        return CompletableFuture.supplyAsync(() -> {
+            String apiUrl = buildAssetsSlicesApiUrl();
+            if (apiUrl == null) {
                 return false;
             }
+
+            String boundary = "worldmap-assets-slices-" + System.currentTimeMillis();
+            String manifestJson = buildAssetSlicesManifestJson(assets);
+            HttpRequest.BodyPublisher bodyPublisher = buildAssetsSlicesMultipartBody(boundary, assetMapHash, manifestJson, assets);
+
+            WorldmapLog.info("Uploading %d missing assets to %s (assetMapHash=%s)",
+                    assets.size(), apiUrl, assetMapHash);
+
+            int attempt = 0;
+            while (attempt < maxRetries) {
+                try {
+                    HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
+                            .uri(URI.create(apiUrl))
+                            .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+                            .header("Accept", "application/json")
+                            .POST(bodyPublisher)
+                            .timeout(Duration.ofMillis(requestTimeout));
+
+                    if (apiKey != null && !apiKey.isEmpty()) {
+                        requestBuilder.header("Authorization", "Bearer " + apiKey);
+                    }
+
+                    HttpRequest httpRequest = requestBuilder.build();
+
+                    if (debugMode || attempt == 0) {
+                        WorldmapLog.info("Uploading asset slices to %s (attempt %d/%d)", apiUrl, attempt + 1, maxRetries);
+                    }
+
+                    HttpResponse<String> response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
+                    int statusCode = response.statusCode();
+                    String responseBody = response.body();
+
+                    if (statusCode >= 200 && statusCode < 300) {
+                        WorldmapLog.info("Successfully uploaded asset slices - Status: %d", statusCode);
+                        return true;
+                    } else if (statusCode == 409) {
+                        WorldmapLog.severe("Asset slice upload rejected due to assetMapHash mismatch (409)");
+                        if (responseBody != null && !responseBody.isEmpty()) {
+                            WorldmapLog.severe("Error response body: %s", responseBody);
+                        }
+                        return false;
+                    } else if (statusCode == 401 || statusCode == 403) {
+                        WorldmapLog.severe("Asset slice upload unauthorized (status %d). Check API key.", statusCode);
+                        return false;
+                    } else {
+                        WorldmapLog.severe("API returned error status %d for asset slices", statusCode);
+                        if (responseBody != null && !responseBody.isEmpty()) {
+                            String bodyPreview = responseBody.length() > 500
+                                    ? responseBody.substring(0, 500) + "... (truncated)"
+                                    : responseBody;
+                            WorldmapLog.severe("Error response body: %s", bodyPreview);
+                        }
+                    }
+                } catch (IOException e) {
+                    String errorMsg = e.getMessage();
+                    if (errorMsg == null || errorMsg.isEmpty()) {
+                        errorMsg = e.getClass().getSimpleName() + " (no message)";
+                    }
+                    if (debugMode || attempt == maxRetries - 1) {
+                        WorldmapLog.severe("IO error uploading asset slices: %s", errorMsg);
+                        if (debugMode) {
+                            WorldmapLog.severe("IO error", e);
+                        }
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    WorldmapLog.severe("Request interrupted for asset slices");
+                    return false;
+                } catch (Exception e) {
+                    String errorMsg = e.getMessage();
+                    if (errorMsg == null || errorMsg.isEmpty()) {
+                        errorMsg = e.getClass().getSimpleName() + " (no message)";
+                    }
+                    if (debugMode || attempt == maxRetries - 1) {
+                        WorldmapLog.severe("Unexpected error uploading asset slices: %s", errorMsg);
+                        if (debugMode) {
+                            WorldmapLog.severe("Unexpected error", e);
+                        }
+                    }
+                }
+
+                attempt++;
+                if (attempt < maxRetries) {
+                    long delayMs = (long) Math.pow(2, attempt - 1) * 1000;
+                    WorldmapLog.info("Retrying asset slice upload in %dms (attempt %d/%d)", delayMs, attempt + 1, maxRetries);
+                    try {
+                        Thread.sleep(delayMs);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return false;
+                    }
+                } else {
+                    WorldmapLog.severe("Failed to upload asset slices after %d attempts", maxRetries);
+                }
+            }
+
+            return false;
         });
     }
 
@@ -533,6 +672,16 @@ public class AssetService {
     }
 
     /**
+     * Builds the API URL for the asset slices endpoint.
+     *
+     * @return The complete API URL, or null if base URL is not configured
+     */
+    private String buildAssetsSlicesApiUrl() {
+        String baseUrl = normalizedBaseUrl();
+        return baseUrl != null ? baseUrl + "/assets/slices" : null;
+    }
+
+    /**
      * Builds the API URL for the assets check endpoint (POST /assets/check).
      *
      * @return The complete API URL, or null if base URL is not configured
@@ -625,6 +774,39 @@ public class AssetService {
 
     private void writeString(OutputStream outputStream, String value) throws IOException {
         outputStream.write(value.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private String buildAssetSlicesManifestJson(List<com.suiramdev.worldmap.models.ResolvedAsset> assets) {
+        JsonArray manifestArray = new JsonArray();
+        for (com.suiramdev.worldmap.models.ResolvedAsset asset : assets) {
+            JsonObject obj = new JsonObject();
+            obj.addProperty("path", asset.getPath());
+            obj.addProperty("contentHash", asset.getContentHash());
+            manifestArray.add(obj);
+        }
+        return gson.toJson(manifestArray);
+    }
+
+    private HttpRequest.BodyPublisher buildAssetsSlicesMultipartBody(String boundary, String assetMapHash,
+            String manifestJson, List<com.suiramdev.worldmap.models.ResolvedAsset> assets) {
+        try {
+            ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+            if (assetMapHash != null && !assetMapHash.isEmpty()) {
+                writeMultipartField(outputStream, boundary, "assetMapHash", assetMapHash);
+            }
+            writeMultipartJsonField(outputStream, boundary, "manifest", manifestJson);
+            for (com.suiramdev.worldmap.models.ResolvedAsset asset : assets) {
+                writeMultipartFile(outputStream, boundary, "files", asset.getPath(), asset.getContentType(), asset.getData());
+            }
+            writeString(outputStream, "--" + boundary + "--\r\n");
+            return HttpRequest.BodyPublishers.ofByteArray(outputStream.toByteArray());
+        } catch (IOException e) {
+            WorldmapLog.severe("Failed to build asset slices multipart body: %s", e.getMessage());
+            if (debugMode) {
+                WorldmapLog.severe("Failed to build asset slices multipart body", e);
+            }
+            return HttpRequest.BodyPublishers.noBody();
+        }
     }
 
     private JsonArray buildAssetMapArray(List<AssetMapPayload> assetMap) {

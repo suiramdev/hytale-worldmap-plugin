@@ -6,6 +6,7 @@ import com.hypixel.hytale.server.core.universe.world.chunk.WorldChunk;
 import com.suiramdev.worldmap.models.ChunkPayload;
 import com.suiramdev.worldmap.models.ChunkSendResult;
 import com.suiramdev.worldmap.services.AssetService;
+import com.suiramdev.worldmap.services.AssetUploadQueue;
 import com.suiramdev.worldmap.services.ChunkService;
 import com.suiramdev.worldmap.util.WorldmapLog;
 
@@ -41,6 +42,7 @@ public class ChunkManager {
 
     private final ChunkService chunkService;
     private final AssetService assetService;
+    private final AssetUploadQueue assetUploadQueue;
     private final AssetManager assetManager;
     private final boolean debugMode;
     private final ExecutorService executorService;
@@ -66,9 +68,10 @@ public class ChunkManager {
      * @param debugMode    Whether debug logging is enabled
      */
     public ChunkManager(ChunkService chunkService, AssetService assetService,
-            AssetManager assetManager, boolean debugMode) {
+            AssetUploadQueue assetUploadQueue, AssetManager assetManager, boolean debugMode) {
         this.chunkService = chunkService;
         this.assetService = assetService;
+        this.assetUploadQueue = assetUploadQueue;
         this.assetManager = assetManager;
         this.debugMode = debugMode;
         this.executorService = Executors.newFixedThreadPool(10);
@@ -112,8 +115,15 @@ public class ChunkManager {
                 // Extract chunk data with halo padding
                 ChunkPayload payload = extractChunkPayload(chunk, chunkX, chunkZ, world);
 
+                String assetMapHash = ensureAssetMapHash();
+                if (assetMapHash == null || assetMapHash.isEmpty()) {
+                    WorldmapLog.severe("Asset-map hash is missing; cannot send chunk (%d,%d)", chunkX, chunkZ);
+                    failedCount.incrementAndGet();
+                    return false;
+                }
+
                 // Send to API (world derived from API key)
-                ChunkSendResult result = chunkService.sendChunkData(payload).join();
+                ChunkSendResult result = chunkService.sendChunkData(payload, assetMapHash).join();
 
                 if (result.isAuthFailure()) {
                     processingEnabled.set(false);
@@ -130,19 +140,18 @@ public class ChunkManager {
                         WorldmapLog.info("Processed %d chunks (failed: %d)", count, failedCount.get());
                     }
                     return true;
-                } else if (result.isAssetMapNeeded()) {
-                    WorldmapLog.info("Asset-map required for chunk (%d,%d). Sending asset-map and retrying...", chunkX, chunkZ);
+                } else if (result.isMissingAssets()) {
+                    WorldmapLog.info("Missing assets for chunk (%d,%d). Uploading slices and retrying...", chunkX, chunkZ);
 
-                    if (sendAssetMapAndRetry(payload)) {
+                    if (uploadMissingAssetsAndRetry(payload, result, assetMapHash)) {
                         int count = processedCount.incrementAndGet();
                         if (count % 100 == 0) {
                             WorldmapLog.info("Processed %d chunks (failed: %d)", count, failedCount.get());
                         }
                         return true;
-                    } else {
-                        failedCount.incrementAndGet();
-                        return false;
                     }
+                    failedCount.incrementAndGet();
+                    return false;
                 } else {
                     failedCount.incrementAndGet();
                     return false;
@@ -159,43 +168,155 @@ public class ChunkManager {
     }
 
     /**
-     * Sends the asset-map and retries sending the chunk.
-     * 
-     * @param payload The chunk payload to retry after sending asset-map
-     * @return true if the retry was successful, false otherwise
+     * Ensures that an asset map hash has been synced for this world.
+     *
+     * @return The synced asset map hash, or null on failure
      */
-    private boolean sendAssetMapAndRetry(ChunkPayload payload) {
+    private String ensureAssetMapHash() {
+        String currentHash = assetService.getLastSyncedAssetMapHash();
+        if (currentHash != null && !currentHash.isEmpty()) {
+            return currentHash;
+        }
+
         try {
-            // Gather asset map
             var assetMap = assetManager.gatherAssetMap();
             if (assetMap == null || assetMap.isEmpty()) {
                 WorldmapLog.severe("No asset map data gathered");
+                return null;
+            }
+
+            WorldmapLog.info("Syncing asset-map (%d entries) before chunk upload", assetMap.size());
+            String syncedHash = assetService.syncAssetMap(assetMap).join();
+            if (syncedHash == null || syncedHash.isEmpty()) {
+                WorldmapLog.severe("Failed to sync asset-map");
+                return null;
+            }
+            return syncedHash;
+        } catch (Exception e) {
+            WorldmapLog.severe("Error syncing asset-map: %s", e.getMessage());
+            if (debugMode) {
+                WorldmapLog.severe("Error syncing asset-map", e);
+            }
+            return null;
+        }
+    }
+
+    /**
+     * Forces a fresh asset-map sync and returns the new hash.
+     *
+     * @return The synced asset map hash, or null on failure
+     */
+    private String refreshAssetMapHash() {
+        try {
+            var assetMap = assetManager.gatherAssetMap();
+            if (assetMap == null || assetMap.isEmpty()) {
+                WorldmapLog.severe("No asset map data gathered for refresh");
+                return null;
+            }
+            WorldmapLog.info("Refreshing asset-map (%d entries)", assetMap.size());
+            String syncedHash = assetService.syncAssetMap(assetMap).join();
+            if (syncedHash == null || syncedHash.isEmpty()) {
+                WorldmapLog.severe("Failed to refresh asset-map");
+                return null;
+            }
+            return syncedHash;
+        } catch (Exception e) {
+            WorldmapLog.severe("Error refreshing asset-map: %s", e.getMessage());
+            if (debugMode) {
+                WorldmapLog.severe("Error refreshing asset-map", e);
+            }
+            return null;
+        }
+    }
+
+    /**
+     * Uploads missing asset slices and retries sending the chunk.
+     *
+     * @param payload       The chunk payload to retry after uploading assets
+     * @param result        The chunk send result containing missing assets
+     * @param assetMapHash  The current asset map hash used for the chunk request
+     * @return true if the retry was successful, false otherwise
+     */
+    private boolean uploadMissingAssetsAndRetry(ChunkPayload payload, ChunkSendResult result, String assetMapHash) {
+        try {
+            if (result == null || !result.isMissingAssets()) {
                 return false;
             }
 
-            WorldmapLog.info("Sending asset-map (%d entries)", assetMap.size());
+            var missingAssets = result.getMissingAssets();
+            String serverHash = result.getAssetMapHash();
+            String effectiveHash = assetMapHash;
+            if (serverHash != null && !serverHash.isEmpty() && !serverHash.equals(assetMapHash)) {
+                WorldmapLog.warn("Asset-map hash mismatch (local=%s, server=%s). Refreshing asset-map.",
+                        assetMapHash, serverHash);
+                String refreshedHash = refreshAssetMapHash();
+                if (refreshedHash == null || refreshedHash.isEmpty()) {
+                    WorldmapLog.severe("Failed to refresh asset-map after mismatch; using server hash");
+                    assetService.updateSyncedAssetMapHash(serverHash);
+                    effectiveHash = serverHash;
+                } else {
+                    effectiveHash = refreshedHash;
+                }
 
-            boolean assetMapSent = assetService.syncAssetMap(assetMap).join();
-            if (!assetMapSent) {
-                WorldmapLog.severe("Failed to send asset-map");
+                ChunkSendResult retryAfterRefresh = chunkService.sendChunkData(payload, effectiveHash).join();
+                if (retryAfterRefresh.isAuthFailure()) {
+                    processingEnabled.set(false);
+                    processingState.set(STATE_HALTED_AUTH);
+                    lastErrorMessage.set("Invalid or missing API key. Use /worldmap key set <key> then /worldmap process start.");
+                    return false;
+                }
+                if (retryAfterRefresh.isSuccess()) {
+                    return true;
+                }
+                if (retryAfterRefresh.isMissingAssets()) {
+                    result = retryAfterRefresh;
+                    missingAssets = retryAfterRefresh.getMissingAssets();
+                } else {
+                    return false;
+                }
+            }
+
+            if (missingAssets == null || missingAssets.isEmpty()) {
+                WorldmapLog.severe("Server reported missing assets but no manifest items were provided");
                 return false;
             }
 
-            WorldmapLog.info("Asset-map sent successfully, retrying chunk (%d,%d)", payload.chunkX, payload.chunkZ);
+            if (debugMode) {
+                WorldmapLog.info("Missing assets reported (%d items, %d block IDs)",
+                        missingAssets.size(),
+                        result.getMissingBlockIds() != null ? result.getMissingBlockIds().size() : 0);
+            }
+            if (effectiveHash == null || effectiveHash.isEmpty()) {
+                WorldmapLog.severe("Asset-map hash is missing; cannot upload asset slices");
+                return false;
+            }
 
-            // Retry sending the chunk
-            ChunkSendResult retryResult = chunkService.sendChunkData(payload).join();
+            boolean uploaded = assetUploadQueue.enqueue(missingAssets, effectiveHash).join();
+            if (!uploaded) {
+                WorldmapLog.severe("Failed to upload missing asset slices");
+                return false;
+            }
+
+            WorldmapLog.info("Missing assets uploaded, retrying chunk (%d,%d)", payload.chunkX, payload.chunkZ);
+
+            ChunkSendResult retryResult = chunkService.sendChunkData(payload, effectiveHash).join();
             if (retryResult.isAuthFailure()) {
                 processingEnabled.set(false);
                 processingState.set(STATE_HALTED_AUTH);
                 lastErrorMessage.set("Invalid or missing API key. Use /worldmap key set <key> then /worldmap process start.");
                 return false;
             }
+
+            if (retryResult.isMissingAssets()) {
+                WorldmapLog.severe("Chunk (%d,%d) still missing assets after upload", payload.chunkX, payload.chunkZ);
+                return false;
+            }
+
             return retryResult.isSuccess();
         } catch (Exception e) {
-            WorldmapLog.severe("Error sending asset-map and retrying chunk: %s", e.getMessage());
+            WorldmapLog.severe("Error uploading asset slices and retrying chunk: %s", e.getMessage());
             if (debugMode) {
-                WorldmapLog.severe("Error sending asset-map and retrying", e);
+                WorldmapLog.severe("Error uploading asset slices and retrying", e);
             }
             return false;
         }
@@ -571,6 +692,9 @@ public class ChunkManager {
         } catch (InterruptedException e) {
             executorService.shutdownNow();
             Thread.currentThread().interrupt();
+        }
+        if (assetUploadQueue != null) {
+            assetUploadQueue.shutdown();
         }
     }
 }

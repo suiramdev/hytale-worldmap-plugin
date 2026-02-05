@@ -181,12 +181,12 @@ public class AssetManager {
                 String top = tex.getUp();
                 String bottom = tex.getDown();
 
-                builder.textureNorth(north != null ? north : "default");
-                builder.textureSouth(south != null ? south : "default");
-                builder.textureEast(east != null ? east : "default");
-                builder.textureWest(west != null ? west : "default");
-                builder.textureTop(top != null ? top : "default");
-                builder.textureBottom(bottom != null ? bottom : "default");
+                builder.textureNorth(north);
+                builder.textureSouth(south);
+                builder.textureEast(east);
+                builder.textureWest(west);
+                builder.textureTop(top);
+                builder.textureBottom(bottom);
             } else {
                 // Try custom model texture (for foliage/model blocks)
                 CustomModelTexture[] customTextures = blockType.getCustomModelTexture();
@@ -210,7 +210,7 @@ public class AssetManager {
             if (debugMode) {
                 WorldmapLog.fine("Error extracting textures: %s", e.getMessage());
             }
-            // Use defaults if extraction fails
+            // Leave texture fields unset if extraction fails
         }
     }
 
