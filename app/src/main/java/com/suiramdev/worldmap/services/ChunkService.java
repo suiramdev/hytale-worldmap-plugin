@@ -2,6 +2,7 @@ package com.suiramdev.worldmap.services;
 
 import com.suiramdev.worldmap.models.ChunkPayload;
 import com.suiramdev.worldmap.models.ChunkSendResult;
+import com.suiramdev.worldmap.models.MissingAssetManifestItem;
 import com.suiramdev.worldmap.util.WorldmapLog;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -15,7 +16,9 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Semaphore;
@@ -80,18 +83,19 @@ public class ChunkService {
      * Sends chunk data to the API asynchronously.
      * World is derived from the API key (key is linked to a world).
      *
-     * @param payload ChunkPayload containing compact, binary-friendly chunk data
+     * @param payload      ChunkPayload containing compact, binary-friendly chunk data
+     * @param assetMapHash The asset map hash for this world (required by server)
      * @return CompletableFuture that completes with ChunkSendResult indicating
-     *         success, failure, or if asset-map is needed
+     *         acceptance, missing assets, or failure
      */
-    public CompletableFuture<ChunkSendResult> sendChunkData(ChunkPayload payload) {
+    public CompletableFuture<ChunkSendResult> sendChunkData(ChunkPayload payload, String assetMapHash) {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 // Acquire permit for rate limiting
                 rateLimiter.acquire();
 
                 try {
-                    return sendChunkDataToApi(payload);
+                    return sendChunkDataToApi(payload, assetMapHash);
                 } finally {
                     rateLimiter.release();
                 }
@@ -108,11 +112,11 @@ public class ChunkService {
     /**
      * Sends chunk data to API endpoint with retry logic.
      *
-     * @param payload The chunk payload to send
-     * @return ChunkSendResult indicating success, failure, or if asset-map is
-     *         needed
+     * @param payload      The chunk payload to send
+     * @param assetMapHash The asset map hash for this world
+     * @return ChunkSendResult indicating acceptance, missing assets, or failure
      */
-    private ChunkSendResult sendChunkDataToApi(ChunkPayload payload) {
+    private ChunkSendResult sendChunkDataToApi(ChunkPayload payload, String assetMapHash) {
         int chunkX = payload.chunkX;
         int chunkZ = payload.chunkZ;
 
@@ -120,6 +124,11 @@ public class ChunkService {
         if (apiKey == null || apiKey.isEmpty()) {
             WorldmapLog.severe("API key is missing. Chunk processing halted. Use /worldmap key set <key> then /worldmap process start.");
             return ChunkSendResult.authFailure();
+        }
+
+        if (assetMapHash == null || assetMapHash.isEmpty()) {
+            WorldmapLog.severe("Asset-map hash is missing. Sync asset-map before sending chunks.");
+            return ChunkSendResult.failure();
         }
 
         // Build the chunk API URL (world derived from API key)
@@ -158,6 +167,7 @@ public class ChunkService {
                         .uri(uri)
                         .header("Content-Type", "application/octet-stream")
                         .header("X-Chunk-Format-Version", String.valueOf(ChunkPayload.FORMAT_VERSION))
+                        .header("X-Asset-Map-Hash", assetMapHash)
                         .POST(HttpRequest.BodyPublishers.ofByteArray(serializedData))
                         .timeout(Duration.ofMillis(requestTimeout));
 
@@ -195,23 +205,29 @@ public class ChunkService {
                     WorldmapLog.fine("Response headers: %s", response.headers().map());
                 }
 
-                if (statusCode >= 200 && statusCode < 300) {
+                if (statusCode == 202) {
+                    String jobId = parseJobId(responseBody);
+                    if (jobId != null && !jobId.isEmpty()) {
+                        WorldmapLog.info("Chunk (%d,%d) accepted - Job ID: %s", chunkX, chunkZ, jobId);
+                    } else {
+                        WorldmapLog.info("Chunk (%d,%d) accepted - Status: %d", chunkX, chunkZ, statusCode);
+                    }
+                    return ChunkSendResult.success(jobId);
+                } else if (statusCode >= 200 && statusCode < 300) {
+                    String jobId = parseJobId(responseBody);
                     WorldmapLog.info("Successfully sent chunk (%d,%d) - Status: %d", chunkX, chunkZ, statusCode);
-                    return ChunkSendResult.success();
+                    return ChunkSendResult.success(jobId);
                 } else if (statusCode == 401 || statusCode == 403) {
                     WorldmapLog.severe("API returned %d (unauthorized). Invalid or missing API key. Chunk processing halted. Use /worldmap key set <key> then /worldmap process start.", statusCode);
                     return ChunkSendResult.authFailure();
-                } else if (statusCode == 428) {
-                    // Check if this is ASSET_MAP_MISSING error
-                    if (isAssetMapMissingError(responseBody)) {
-                        WorldmapLog.info("Received 428 ASSET_MAP_MISSING for chunk (%d,%d). Asset-map is required.", chunkX, chunkZ);
-                        return ChunkSendResult.needsAssetMap();
-                    } else {
-                        WorldmapLog.severe("API returned 428 status (not ASSET_MAP_MISSING) for chunk (%d,%d)", chunkX, chunkZ);
-                        if (responseBody != null && !responseBody.isEmpty()) {
-                            WorldmapLog.severe("Error response body: %s", responseBody);
-                        }
-                    }
+                } else if (statusCode == 409) {
+                    MissingAssetsResponse missingAssets = parseMissingAssets(responseBody);
+                    WorldmapLog.info("Chunk (%d,%d) missing assets (paths: %d, block IDs: %d)",
+                            chunkX, chunkZ,
+                            missingAssets.missingAssets.size(),
+                            missingAssets.missingBlockIds.size());
+                    return ChunkSendResult.missingAssets(missingAssets.missingAssets, missingAssets.missingBlockIds,
+                            missingAssets.assetMapHash);
                 } else {
                     WorldmapLog.severe("API returned error status %d for chunk (%d,%d)", statusCode, chunkX, chunkZ);
                     if (responseBody != null && !responseBody.isEmpty()) {
@@ -497,6 +513,149 @@ public class ChunkService {
         return processedChunks;
     }
 
+    private MissingAssetsResponse parseMissingAssets(String responseBody) {
+        List<MissingAssetManifestItem> missingAssets = new ArrayList<>();
+        List<Integer> missingBlockIds = new ArrayList<>();
+        String assetMapHash = null;
+
+        if (responseBody == null || responseBody.trim().isEmpty()) {
+            return new MissingAssetsResponse(missingAssets, missingBlockIds, assetMapHash);
+        }
+
+        try {
+            JsonElement jsonElement = gson.fromJson(responseBody, JsonElement.class);
+            if (jsonElement != null && jsonElement.isJsonObject()) {
+                JsonObject jsonObject = jsonElement.getAsJsonObject();
+
+                JsonElement assetsElement = null;
+                if (jsonObject.has("missingAssets")) {
+                    assetsElement = jsonObject.get("missingAssets");
+                } else if (jsonObject.has("manifest")) {
+                    assetsElement = jsonObject.get("manifest");
+                }
+
+                if (assetsElement != null && assetsElement.isJsonArray()) {
+                    for (JsonElement element : assetsElement.getAsJsonArray()) {
+                        if (element != null && element.isJsonObject()) {
+                            JsonObject obj = element.getAsJsonObject();
+                            String assetId = obj.has("assetId") && obj.get("assetId").isJsonPrimitive()
+                                    ? obj.get("assetId").getAsString()
+                                    : null;
+                            String path = obj.has("path") && obj.get("path").isJsonPrimitive()
+                                    ? obj.get("path").getAsString()
+                                    : null;
+                            String itemAssetMapHash = obj.has("assetMapHash") && obj.get("assetMapHash").isJsonPrimitive()
+                                    ? obj.get("assetMapHash").getAsString()
+                                    : null;
+                            String hashAlgorithm = obj.has("hashAlgorithm") && obj.get("hashAlgorithm").isJsonPrimitive()
+                                    ? obj.get("hashAlgorithm").getAsString()
+                                    : null;
+                            String contentTypeHint = obj.has("contentTypeHint") && obj.get("contentTypeHint").isJsonPrimitive()
+                                    ? obj.get("contentTypeHint").getAsString()
+                                    : null;
+                            if (assetMapHash == null && itemAssetMapHash != null && !itemAssetMapHash.isEmpty()) {
+                                assetMapHash = itemAssetMapHash;
+                            }
+                            missingAssets.add(new MissingAssetManifestItem(assetId, path, itemAssetMapHash, hashAlgorithm, contentTypeHint));
+                        }
+                    }
+                } else if (jsonObject.has("missingPaths")) {
+                    JsonElement pathsElement = jsonObject.get("missingPaths");
+                    if (pathsElement.isJsonArray()) {
+                        for (JsonElement element : pathsElement.getAsJsonArray()) {
+                            if (element.isJsonPrimitive()) {
+                                String path = element.getAsString();
+                                if (path != null && !path.trim().isEmpty()) {
+                                    missingAssets.add(new MissingAssetManifestItem(null, path.trim(), null, null, null));
+                                }
+                            }
+                        }
+                    } else if (pathsElement.isJsonPrimitive()) {
+                        String pathsValue = pathsElement.getAsString();
+                        if (pathsValue != null && !pathsValue.trim().isEmpty()) {
+                            for (String path : pathsValue.split(",")) {
+                                if (!path.trim().isEmpty()) {
+                                    missingAssets.add(new MissingAssetManifestItem(null, path.trim(), null, null, null));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (jsonObject.has("missingBlockIds")) {
+                    JsonElement idsElement = jsonObject.get("missingBlockIds");
+                    if (idsElement.isJsonArray()) {
+                        for (JsonElement element : idsElement.getAsJsonArray()) {
+                            if (element.isJsonPrimitive()) {
+                                try {
+                                    missingBlockIds.add(element.getAsInt());
+                                } catch (Exception ignored) {
+                                    // Ignore non-numeric values
+                                }
+                            }
+                        }
+                    } else if (idsElement.isJsonPrimitive()) {
+                        String idsValue = idsElement.getAsString();
+                        if (idsValue != null && !idsValue.trim().isEmpty()) {
+                            for (String id : idsValue.split(",")) {
+                                try {
+                                    missingBlockIds.add(Integer.parseInt(id.trim()));
+                                } catch (NumberFormatException ignored) {
+                                    // Ignore non-numeric values
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (jsonObject.has("assetMapHash") && jsonObject.get("assetMapHash").isJsonPrimitive()) {
+                    assetMapHash = jsonObject.get("assetMapHash").getAsString();
+                }
+            }
+        } catch (Exception e) {
+            if (debugMode) {
+                WorldmapLog.fine("Error parsing missing assets response: %s", e.getMessage());
+            }
+        }
+
+        return new MissingAssetsResponse(missingAssets, missingBlockIds, assetMapHash);
+    }
+
+    private String parseJobId(String responseBody) {
+        if (responseBody == null || responseBody.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            JsonElement jsonElement = gson.fromJson(responseBody, JsonElement.class);
+            if (jsonElement != null && jsonElement.isJsonObject()) {
+                JsonObject jsonObject = jsonElement.getAsJsonObject();
+                if (jsonObject.has("jobId") && jsonObject.get("jobId").isJsonPrimitive()) {
+                    return jsonObject.get("jobId").getAsString();
+                }
+                if (jsonObject.has("id") && jsonObject.get("id").isJsonPrimitive()) {
+                    return jsonObject.get("id").getAsString();
+                }
+            }
+        } catch (Exception e) {
+            if (debugMode) {
+                WorldmapLog.fine("Error parsing jobId: %s", e.getMessage());
+            }
+        }
+        return null;
+    }
+
+    private static final class MissingAssetsResponse {
+        private final List<MissingAssetManifestItem> missingAssets;
+        private final List<Integer> missingBlockIds;
+        private final String assetMapHash;
+
+        private MissingAssetsResponse(List<MissingAssetManifestItem> missingAssets, List<Integer> missingBlockIds, String assetMapHash) {
+            this.missingAssets = missingAssets != null ? missingAssets : List.of();
+            this.missingBlockIds = missingBlockIds != null ? missingBlockIds : List.of();
+            this.assetMapHash = assetMapHash;
+        }
+    }
+
     /**
      * Builds the API URL for the chunks list endpoint.
      * World is derived from the API key.
@@ -541,39 +700,5 @@ public class ChunkService {
         return baseUrl + "/chunks/process";
     }
 
-    /**
-     * Checks if the response body indicates an ASSET_MAP_MISSING error.
-     * 
-     * @param responseBody The response body from the API
-     * @return true if the error code is ASSET_MAP_MISSING, false otherwise
-     */
-    private boolean isAssetMapMissingError(String responseBody) {
-        if (responseBody == null || responseBody.trim().isEmpty()) {
-            return false;
-        }
-
-        try {
-            JsonElement jsonElement = gson.fromJson(responseBody, JsonElement.class);
-            if (jsonElement != null && jsonElement.isJsonObject()) {
-                JsonObject jsonObject = jsonElement.getAsJsonObject();
-                // Check for "code" field with value "ASSET_MAP_MISSING"
-                if (jsonObject.has("code")) {
-                    String code = jsonObject.get("code").getAsString();
-                    return "ASSET_MAP_MISSING".equals(code);
-                }
-                // Also check for "error" field that might contain the code
-                if (jsonObject.has("error")) {
-                    String error = jsonObject.get("error").getAsString();
-                    return "ASSET_MAP_MISSING".equals(error);
-                }
-            }
-        } catch (Exception e) {
-            if (debugMode) {
-                WorldmapLog.fine("Error parsing response body for ASSET_MAP_MISSING check: %s", e.getMessage());
-            }
-        }
-
-        // Fallback: check if response body contains the string "ASSET_MAP_MISSING"
-        return responseBody.contains("ASSET_MAP_MISSING");
-    }
+    
 }

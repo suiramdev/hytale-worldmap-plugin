@@ -55,6 +55,7 @@ public class Main extends JavaPlugin {
     private Config<PluginConfig> config;
     private ChunkService chunkService;
     private AssetService assetService;
+    private com.suiramdev.worldmap.services.AssetUploadQueue assetUploadQueue;
 
     // Managers
     private ChunkManager chunkManager;
@@ -103,11 +104,19 @@ public class Main extends JavaPlugin {
                 WorldmapLog.info("Fetching processed chunks list from API...");
                 chunkManager.fetchProcessedChunksList().join();
 
-                // Send asset map on startup
-                sendAssetMapOnStartup();
-
-                // Process chunks asynchronously (will use API list)
-                processAllChunks();
+                // Send asset map on startup, then process chunks
+                sendAssetMapOnStartup().thenAccept(assetMapHash -> {
+                    if (assetMapHash != null && !assetMapHash.isEmpty()) {
+                        World world = Universe.get() != null ? Universe.get().getDefaultWorld() : null;
+                        if (world != null) {
+                            world.execute(this::processAllChunks);
+                        } else {
+                            processAllChunks();
+                        }
+                    } else {
+                        WorldmapLog.warn("Asset-map sync failed; chunk processing not started. Retry after asset-map is available.");
+                    }
+                });
             }
 
             // Register for block place/break/damage to re-send modified chunks
@@ -197,9 +206,19 @@ public class Main extends JavaPlugin {
         // Initialize asset manager
         assetManager = new AssetManager(config.get().isDebugMode());
 
+        // Initialize asset upload queue and resolver
+        var assetBinaryResolver = new com.suiramdev.worldmap.services.AssetBinaryResolver(
+                config.get().getAssetsZipPath(),
+                config.get().isDebugMode(),
+                getClass().getClassLoader());
+        assetUploadQueue = new com.suiramdev.worldmap.services.AssetUploadQueue(
+                assetService,
+                assetBinaryResolver,
+                config.get().isDebugMode());
+
         // Initialize chunk manager (requires asset service and manager for
         // coordination)
-        chunkManager = new ChunkManager(chunkService, assetService, assetManager, config.get().isDebugMode());
+        chunkManager = new ChunkManager(chunkService, assetService, assetUploadQueue, assetManager, config.get().isDebugMode());
     }
 
     /**
@@ -210,8 +229,8 @@ public class Main extends JavaPlugin {
      * may not be fully initialized immediately at plugin startup.
      * </p>
      */
-    private void sendAssetMapOnStartup() {
-        CompletableFuture.runAsync(() -> {
+    private CompletableFuture<String> sendAssetMapOnStartup() {
+        return CompletableFuture.supplyAsync(() -> {
             try {
                 WorldmapLog.info("Sending asset-map to API");
 
@@ -222,25 +241,21 @@ public class Main extends JavaPlugin {
                 if (assetMap == null || assetMap.isEmpty()) {
                     WorldmapLog.warn("No asset map data gathered after retries. " +
                             "BlockType registry may not be available yet. Asset-map will be sent when needed.");
-                    return;
+                    return null;
                 }
 
                 WorldmapLog.info("Gathered %d block entries for asset map", assetMap.size());
 
-                assetService.syncAssetMap(assetMap)
-                        .thenAccept(success -> {
-                            if (success) {
-                                WorldmapLog.info("Asset-map sent successfully");
-                            } else {
-                                WorldmapLog.warn("Failed to send asset-map");
-                            }
-                        })
-                        .exceptionally(throwable -> {
-                            WorldmapLog.severe("Error sending asset-map: " + throwable.getMessage(), throwable);
-                            return null;
-                        });
+                String assetMapHash = assetService.syncAssetMap(assetMap).join();
+                if (assetMapHash != null && !assetMapHash.isEmpty()) {
+                    WorldmapLog.info("Asset-map sent successfully (hash: %s)", assetMapHash);
+                } else {
+                    WorldmapLog.warn("Failed to send asset-map");
+                }
+                return assetMapHash;
             } catch (Exception e) {
                 WorldmapLog.severe("Error getting world for asset-map: " + e.getMessage(), e);
+                return null;
             }
         });
     }
@@ -304,7 +319,18 @@ public class Main extends JavaPlugin {
      * process start).
      */
     public void processAllChunksPublic() {
-        processAllChunks();
+        sendAssetMapOnStartup().thenAccept(assetMapHash -> {
+            if (assetMapHash != null && !assetMapHash.isEmpty()) {
+                World world = Universe.get() != null ? Universe.get().getDefaultWorld() : null;
+                if (world != null) {
+                    world.execute(this::processAllChunks);
+                } else {
+                    processAllChunks();
+                }
+            } else {
+                WorldmapLog.warn("Asset-map sync failed; chunk processing not started. Retry after asset-map is available.");
+            }
+        });
     }
 
     /**
@@ -480,9 +506,9 @@ public class Main extends JavaPlugin {
             chunkManager.fetchProcessedChunksList().thenRun(() -> {
                 World world = Universe.get() != null ? Universe.get().getDefaultWorld() : null;
                 if (world != null) {
-                    world.execute(this::processAllChunks);
+                    world.execute(this::processAllChunksPublic);
                 } else {
-                    processAllChunks();
+                    processAllChunksPublic();
                 }
             });
         }

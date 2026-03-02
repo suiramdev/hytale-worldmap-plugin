@@ -201,16 +201,16 @@ public class AssetMapPayload {
     }
 
     /**
-     * Builder for AssetMapPayload with sensible defaults.
+     * Builder for AssetMapPayload.
      */
     public static class Builder {
         private final int blockId;
-        private String textureNorth = "default";
-        private String textureSouth = "default";
-        private String textureEast = "default";
-        private String textureWest = "default";
-        private String textureTop = "default";
-        private String textureBottom = "default";
+        private String textureNorth;
+        private String textureSouth;
+        private String textureEast;
+        private String textureWest;
+        private String textureTop;
+        private String textureBottom;
         private DrawType drawType = DrawType.Cube;
         private String customModel = null;
         private Opacity opacity = Opacity.Solid;
@@ -234,7 +234,7 @@ public class AssetMapPayload {
          * @return This builder instance
          */
         public Builder textureNorth(String texture) {
-            this.textureNorth = texture != null ? texture : "default";
+            this.textureNorth = texture;
             return this;
         }
 
@@ -245,7 +245,7 @@ public class AssetMapPayload {
          * @return This builder instance
          */
         public Builder textureSouth(String texture) {
-            this.textureSouth = texture != null ? texture : "default";
+            this.textureSouth = texture;
             return this;
         }
 
@@ -256,7 +256,7 @@ public class AssetMapPayload {
          * @return This builder instance
          */
         public Builder textureEast(String texture) {
-            this.textureEast = texture != null ? texture : "default";
+            this.textureEast = texture;
             return this;
         }
 
@@ -267,7 +267,7 @@ public class AssetMapPayload {
          * @return This builder instance
          */
         public Builder textureWest(String texture) {
-            this.textureWest = texture != null ? texture : "default";
+            this.textureWest = texture;
             return this;
         }
 
@@ -278,7 +278,7 @@ public class AssetMapPayload {
          * @return This builder instance
          */
         public Builder textureTop(String texture) {
-            this.textureTop = texture != null ? texture : "default";
+            this.textureTop = texture;
             return this;
         }
 
@@ -289,7 +289,7 @@ public class AssetMapPayload {
          * @return This builder instance
          */
         public Builder textureBottom(String texture) {
-            this.textureBottom = texture != null ? texture : "default";
+            this.textureBottom = texture;
             return this;
         }
 
