@@ -32,14 +32,14 @@ public class ChunkSendResult {
      * @param jobId         job ID for accepted chunks (if any)
      */
     public ChunkSendResult(boolean success, boolean authFailure, boolean missingAssets,
-                           java.util.List<MissingAssetManifestItem> missingAssets,
+                           java.util.List<MissingAssetManifestItem> missingAssetsItems,
                            java.util.List<Integer> missingBlockIds,
                            String assetMapHash,
                            String jobId) {
         this.success = success;
         this.authFailure = authFailure;
         this.missingAssets = missingAssets;
-        this.missingAssetsList = missingAssets != null ? java.util.List.copyOf(missingAssets) : java.util.List.of();
+        this.missingAssetsList = missingAssetsItems != null ? java.util.List.copyOf(missingAssetsItems) : java.util.List.of();
         this.missingBlockIds = missingBlockIds != null ? java.util.List.copyOf(missingBlockIds) : java.util.List.of();
         this.assetMapHash = assetMapHash;
         this.jobId = jobId;

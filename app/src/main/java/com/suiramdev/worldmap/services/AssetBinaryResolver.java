@@ -1,7 +1,5 @@
 package com.suiramdev.worldmap.services;
 
-import com.hypixel.hytale.assetstore.Asset;
-import com.hypixel.hytale.assetstore.AssetPack;
 import com.hypixel.hytale.assetstore.AssetRegistry;
 import com.suiramdev.worldmap.models.MissingAssetManifestItem;
 import com.suiramdev.worldmap.util.WorldmapLog;
@@ -39,7 +37,7 @@ public class AssetBinaryResolver {
         }
 
         // Resolution order:
-        // 1) AssetRegistry.getOptional(assetId, Asset.class) -> AssetPack.getRoot() path lookup
+        // 1) AssetRegistry lookup (reflection) -> AssetPack.getRoot() path lookup
         // 2) Assets.zip (configured path)
         // 3) Embedded plugin assets (classpath)
         String path = normalizePath(item.getPath());
@@ -74,16 +72,21 @@ public class AssetBinaryResolver {
         }
 
         try {
-            Optional<Asset> assetOpt = registry.getOptional(assetId, Asset.class);
-            if (assetOpt.isEmpty()) {
+            Object assetOptObj = invokeGetOptional(registry, assetId);
+            Optional<?> assetOpt = asOptional(assetOptObj);
+            if (assetOpt == null || assetOpt.isEmpty()) {
                 return Optional.empty();
             }
-            Asset asset = assetOpt.get();
-            AssetPack pack = asset.getPack();
+            Object asset = assetOpt.get();
+            Object pack = invokeNoArg(asset, "getPack");
             if (pack == null) {
                 return Optional.empty();
             }
-            Path root = pack.getRoot();
+            Object rootObj = invokeNoArg(pack, "getRoot");
+            if (!(rootObj instanceof Path)) {
+                return Optional.empty();
+            }
+            Path root = (Path) rootObj;
             if (root == null) {
                 return Optional.empty();
             }
@@ -101,6 +104,46 @@ public class AssetBinaryResolver {
         }
 
         return Optional.empty();
+    }
+
+    private Object invokeGetOptional(AssetRegistry registry, String assetId) {
+        if (registry == null || assetId == null || assetId.isEmpty()) {
+            return null;
+        }
+        try {
+            Method method = registry.getClass().getMethod("getOptional", String.class, Class.class);
+            Object jsonAssetWithMapClass = Class.forName("com.hypixel.hytale.assetstore.map.JsonAssetWithMap");
+            return method.invoke(registry, assetId, jsonAssetWithMapClass);
+        } catch (Exception ignored) {
+            // Method shape is runtime/version-dependent.
+        }
+        try {
+            Method method = registry.getClass().getMethod("getOptional", String.class);
+            return method.invoke(registry, assetId);
+        } catch (Exception ignored) {
+            // Method shape is runtime/version-dependent.
+        }
+        return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Optional<?> asOptional(Object value) {
+        if (value instanceof Optional<?>) {
+            return (Optional<?>) value;
+        }
+        return null;
+    }
+
+    private Object invokeNoArg(Object target, String methodName) {
+        if (target == null || methodName == null || methodName.isEmpty()) {
+            return null;
+        }
+        try {
+            Method method = target.getClass().getMethod(methodName);
+            return method.invoke(target);
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private Optional<byte[]> resolveFromAssetsZip(String path) {
